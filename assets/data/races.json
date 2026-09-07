@@ -4274,7 +4274,10 @@
       "sourceUrl": "https://www.tritour.org/calendario-carreras-cancun",
       "confidence": "medium",
       "notes": null,
-      "sourceNotes": "Single aggregator source; registration link resolves to the organizer's own Protudec platform, which supports authenticity."
+      "sourceNotes": "Single aggregator source; registration link resolves to the organizer's own Protudec platform, which supports authenticity. Race-watch 2026-09-07: date (Sun 2026-09-13, 6:30am) and venue (Parque Central \"Gral. Ángel Remigio Rosado\", in front of the Municipal Palace of Bacalar) reconfirmed via Tri Tour México listing and web search; no cancellation/postponement notices found on Protudec's official channels. Direct fetch of tritour.org and protudec.mx blocked by network egress policy this run, so confirmation relied on cached/indexed copies rather than a live page load.",
+      "status": "ok",
+      "statusNote": null,
+      "lastVerified": "2026-09-07"
     },
     {
       "id": "3kids-cozumel-2026",
