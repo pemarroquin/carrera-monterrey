@@ -18,7 +18,8 @@ vi.mock('@/lib/supabase', () => ({
   TERRITORY_ENABLED: true,
 }));
 
-const { AREA_NAME_MAX, isValidAreaName, rankLegends } = await import('@/lib/areas');
+const { AREA_DELETE_WINDOW_MS, AREA_NAME_MAX, canDeleteArea, isValidAreaName, rankLegends } =
+  await import('@/lib/areas');
 
 // Declared here rather than imported as a type: `await import` gives values,
 // and a second type-only import of the same module would defeat the mock.
@@ -91,5 +92,33 @@ describe('isValidAreaName', () => {
 
   it('measures the TRIMMED name, matching the DB CHECK', () => {
     expect(isValidAreaName(`  ${'x'.repeat(AREA_NAME_MAX)}  `)).toBe(true);
+  });
+});
+
+describe('canDeleteArea', () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.parse('2026-09-08T12:00:00Z');
+
+  it('allows removing a mistake noticed straight away', () => {
+    expect(canDeleteArea('2026-09-08T11:59:00Z', now)).toBe(true);
+  });
+
+  it('refuses once the window has passed', () => {
+    // The case the window exists to refuse: abandoning a contested area days
+    // later, once someone else has started winning it.
+    expect(canDeleteArea('2026-09-08T10:59:00Z', now)).toBe(false);
+    expect(canDeleteArea('2026-09-01T12:00:00Z', now)).toBe(false);
+  });
+
+  it('closes exactly on the hour, not after', () => {
+    expect(canDeleteArea(new Date(now - HOUR + 1000).toISOString(), now)).toBe(true);
+    expect(canDeleteArea(new Date(now - HOUR).toISOString(), now)).toBe(false);
+  });
+
+  it('matches the constant the RLS policy mirrors', () => {
+    // If these drift, the UI offers a button the database refuses — which
+    // surfaces as a silent no-op, since RLS makes a policy-less DELETE
+    // return success having deleted nothing.
+    expect(AREA_DELETE_WINDOW_MS).toBe(HOUR);
   });
 });

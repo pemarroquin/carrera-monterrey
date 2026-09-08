@@ -28,6 +28,9 @@ export interface Area {
   id: string;
   name: string;
   createdBy: string;
+  /** ISO timestamp. Needed by the client only to decide whether to OFFER
+   *  deletion — see canDeleteArea. The policy is the actual rule. */
+  createdAt: string;
   regionId: string | null;
   cellCount: number;
 }
@@ -106,7 +109,7 @@ export async function createArea(
         region_id: regionId,
         cell_count: unique.length,
       })
-      .select('id, name, created_by, region_id, cell_count')
+      .select('id, name, created_by, created_at, region_id, cell_count')
       .single();
     if (error || !data) return { ok: false, reason: 'network' };
 
@@ -135,6 +138,7 @@ export async function createArea(
         id: data.id,
         name: data.name,
         createdBy: data.created_by,
+        createdAt: data.created_at,
         regionId: data.region_id,
         cellCount: data.cell_count,
       },
@@ -147,7 +151,7 @@ export async function createArea(
  *  a coarse metro string already and no need for PostGIS here. */
 export async function fetchAreas(regionId: string | null): Promise<AreaOutcome<{ areas: Area[] }>> {
   return withSession<{ areas: Area[] }>(async () => {
-    let query = supabase.from('areas').select('id, name, created_by, region_id, cell_count');
+    let query = supabase.from('areas').select('id, name, created_by, created_at, region_id, cell_count');
     if (regionId !== null) query = query.eq('region_id', regionId);
 
     const { data, error } = await query;
@@ -158,6 +162,7 @@ export async function fetchAreas(regionId: string | null): Promise<AreaOutcome<{
         id: a.id,
         name: a.name,
         createdBy: a.created_by,
+        createdAt: a.created_at,
         regionId: a.region_id,
         cellCount: a.cell_count,
       })),
@@ -206,5 +211,44 @@ export async function fetchLegends(
         })),
       ),
     };
+  });
+}
+
+/**
+ * How long after creating an area its creator may still remove it. Must match
+ * the window in the RLS policy (20260908040000) — the database is the rule,
+ * this constant only decides whether the UI offers the button.
+ *
+ * One hour separates the two cases it has to tell apart: a typo or a test is
+ * noticed within minutes, while abandoning a contested area happens days
+ * later, once someone else starts winning it.
+ */
+export const AREA_DELETE_WINDOW_MS = 60 * 60 * 1000;
+
+/** Whether `createdAt` is still inside that window. Pure, so the UI can ask
+ *  without a round trip; the policy decides for real. */
+export function canDeleteArea(createdAt: string, now: number = Date.now()): boolean {
+  return now - new Date(createdAt).getTime() < AREA_DELETE_WINDOW_MS;
+}
+
+/**
+ * Removes an area the caller just created. `area_cells` goes with it via ON
+ * DELETE CASCADE.
+ *
+ * Returns 'denied' rather than a bare failure when nothing was deleted. RLS
+ * makes a DELETE that matches no policy a silent no-op returning success —
+ * the exact trap `runs: delete own` sat in for weeks — so this checks the
+ * returned row count instead of trusting the absence of an error.
+ */
+export type DeleteAreaOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'disabled' | 'auth' | 'network' | 'denied' };
+
+export async function deleteArea(areaId: string): Promise<DeleteAreaOutcome> {
+  return withSession<{ deleted: true }, 'denied'>(async () => {
+    const { data, error } = await supabase.from('areas').delete().eq('id', areaId).select('id');
+    if (error) return { ok: false, reason: 'network' };
+    if (!data || data.length === 0) return { ok: false, reason: 'denied' };
+    return { ok: true, deleted: true };
   });
 }
