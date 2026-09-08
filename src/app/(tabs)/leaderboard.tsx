@@ -20,10 +20,11 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
-  View,
   useColorScheme,
+  View,
 } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -34,6 +35,7 @@ import { BottomTabInset, Colors, Spacing } from '@/constants/theme';
 import { useI18n } from '@/lib/i18n';
 import { rankByTileCount, type TileLeaderboardEntry } from '@/lib/leaderboard';
 import { useRegion } from '@/lib/region-context';
+import { LegendsBoard } from '@/components/legends-board';
 import { onIdentityChanged } from '@/lib/auth-events';
 import { fetchTileLeaderboard, type TileLeaderboardOutcome } from '@/lib/territory-sync';
 
@@ -68,6 +70,11 @@ export default function LeaderboardScreen() {
   // each row against the current session's id, so a sign-in that swaps
   // this device onto another account changes what this screen should
   // render without `isFocused` ever changing. See auth-events.ts.
+  // WHICH board. Not a scope of the same ranking — Board 1 counts ground
+  // held right now, Board 2 counts days shown up, and the two numbers are
+  // not comparable. Behind a toggle rather than mixed into one list, where
+  // they would read as a single ranking.
+  const [board, setBoard] = useState<'territory' | 'legends'>('territory');
   const [identitySignal, setIdentitySignal] = useState(0);
   useEffect(() => onIdentityChanged(() => setIdentitySignal((v) => v + 1)), []);
 
@@ -108,9 +115,34 @@ export default function LeaderboardScreen() {
       {/* What this board actually measures. Under first-to-claim the count
           only ever grew, so it needed no explanation; under conquest it can
           FALL while the runner sleeps and someone else runs their streets,
-          and a score that drops with no stated reason reads as a bug. */}
-      <Text style={[styles.subtitle, { color: c.textSecondary }]}>{t('leaderboard.subtitle')}</Text>
+          and a score that drops with no stated reason reads as a bug.
+          Only for Board 1 — Board 2 carries its own explainer, since it is
+          measuring something else entirely. */}
+      {board === 'territory' && (
+        <Text style={[styles.subtitle, { color: c.textSecondary }]}>{t('leaderboard.subtitle')}</Text>
+      )}
 
+      <View style={styles.segmentRow}>
+        {(['territory', 'legends'] as const).map((key) => {
+          const selected = board === key;
+          return (
+            <Pressable
+              key={key}
+              onPress={() => setBoard(key)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              aria-checked={selected}
+              style={[styles.segment, { backgroundColor: selected ? c.accent : c.backgroundElement }]}>
+              <Text style={[styles.segmentLabel, { color: selected ? '#ffffff' : c.textSecondary }]}>
+                {t(key === 'territory' ? 'leaderboard.boardTerritory' : 'leaderboard.boardLegends')}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* Region/global applies to BOTH boards — an area belongs to a region
+          the same way a tile does. */}
       <View style={styles.segmentRow}>
         {(['region', 'global'] as const).map((key) => {
           const selected = scope === key;
@@ -134,7 +166,11 @@ export default function LeaderboardScreen() {
         })}
       </View>
 
-      {data === null ? (
+      {board === 'legends' ? (
+        <ScrollView contentContainerStyle={styles.legendsScroll}>
+          <LegendsBoard regionId={scope === 'region' ? region.id : null} c={c} meUserId={meUserId} />
+        </ScrollView>
+      ) : data === null ? (
         <View style={styles.centre}>
           <ActivityIndicator color={c.textSecondary} />
         </View>
@@ -301,6 +337,7 @@ const styles = StyleSheet.create({
   },
   segmentLabel: { fontSize: 14, fontWeight: '700' },
   list: { padding: Spacing.three, gap: Spacing.two, flexGrow: 1, paddingBottom: BottomTabInset },
+  legendsScroll: { paddingBottom: BottomTabInset },
   centre: {
     flex: 1,
     alignItems: 'center',
