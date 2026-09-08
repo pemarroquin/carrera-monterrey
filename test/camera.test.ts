@@ -15,9 +15,13 @@ import {
   bearingFromPath,
   boundsOfPath,
   destinationPoint,
+  followOffsetPx,
+  overviewPadding,
   shortestAngleDelta,
   smoothBearing,
+  visibleBand,
 } from '@/lib/camera';
+import { FOLLOW_OFFSET_RATIO } from '@/constants/map';
 import { haversineM, type LatLng } from '@/lib/territory';
 
 // Monterrey-ish latitude, matching territory.test.ts / tiles.test.ts's own
@@ -191,5 +195,75 @@ describe('boundsOfPath', () => {
       expect(p.lng).toBeGreaterThanOrEqual((bounds as NonNullable<typeof bounds>).west);
       expect(p.lng).toBeLessThanOrEqual((bounds as NonNullable<typeof bounds>).east);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chrome-aware framing
+// ---------------------------------------------------------------------------
+// Reported 2026-09-07: the route sat lower on screen than it should. Two
+// separate causes, both encoded here so neither can come back.
+describe('visibleBand', () => {
+  it('subtracts the chrome and reports how far the visible centre sits below the container centre', () => {
+    // A container 1000 tall with 300 of stats on top and 100 of tab bar
+    // below leaves a 600 band whose centre is at 300 + 300 = 600, i.e. 100
+    // below the container's own centre of 500.
+    expect(visibleBand(1000, { top: 300, bottom: 100 })).toEqual({ height: 600, centreShiftPx: 100 });
+  });
+
+  it('is a no-op when nothing covers the map', () => {
+    expect(visibleBand(1000, { top: 0, bottom: 0 })).toEqual({ height: 1000, centreShiftPx: 0 });
+  });
+
+  it('falls back to the whole container rather than inverting on degenerate chrome', () => {
+    // Chrome taller than the container (a not-yet-laid-out container, or a
+    // very small window) would otherwise give a negative height and flip
+    // every offset derived from it.
+    expect(visibleBand(200, { top: 300, bottom: 100 })).toEqual({ height: 200, centreShiftPx: 0 });
+    expect(visibleBand(0, { top: 0, bottom: 0 })).toEqual({ height: 0, centreShiftPx: 0 });
+  });
+});
+
+describe('followOffsetPx', () => {
+  it('puts the runner two thirds down the VISIBLE band at the shipped ratio', () => {
+    const containerH = 1000;
+    const insets = { top: 300, bottom: 100 };
+    const offset = followOffsetPx(containerH, insets, FOLLOW_OFFSET_RATIO);
+    // Where the runner actually lands, in container coordinates.
+    const y = containerH / 2 + offset;
+    const { height } = visibleBand(containerH, insets);
+    const fractionOfBand = (y - insets.top) / height;
+    // "Lower third" — the framing FOLLOW_OFFSET_RATIO's doc has always
+    // claimed. The old 0.28-of-the-container form put this at 0.78.
+    expect(fractionOfBand).toBeCloseTo(2 / 3, 2);
+  });
+
+  it('centres in the visible band at ratio 0 — the documented way to opt out', () => {
+    const offset = followOffsetPx(1000, { top: 300, bottom: 100 }, 0);
+    expect(1000 / 2 + offset).toBe(600); // the band's centre
+  });
+
+  it('is 0 before the container has been laid out', () => {
+    expect(followOffsetPx(0, { top: 300, bottom: 100 }, FOLLOW_OFFSET_RATIO)).toBe(0);
+  });
+});
+
+describe('overviewPadding', () => {
+  it('adds the chrome to the base padding so the fit lands in the visible band', () => {
+    expect(overviewPadding({ top: 300, bottom: 100 }, 56)).toEqual({
+      top: 356,
+      bottom: 156,
+      left: 56,
+      right: 56,
+    });
+  });
+
+  it('degrades to uniform padding when nothing covers the map', () => {
+    expect(overviewPadding({ top: 0, bottom: 0 }, 56)).toEqual({
+      top: 56,
+      bottom: 56,
+      left: 56,
+      right: 56,
+    });
   });
 });

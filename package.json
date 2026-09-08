@@ -73,7 +73,8 @@
     "tiles-preview": "node scripts/tiles-preview.mjs",
     "geometry-audit": "node scripts/geometry-audit.mjs",
     "audit-territories": "node scripts/audit-territories.mjs",
-    "convert-tile-res": "vite-node --config vitest.config.ts scripts/convert-tile-res.ts"
+    "convert-tile-res": "vite-node --config vitest.config.ts scripts/convert-tile-res.ts",
+    "verify-claims": "vite-node --config vitest.config.ts scripts/verify-claims.ts"
   },
   "private": true
 }

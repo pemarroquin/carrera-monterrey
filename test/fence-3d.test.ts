@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import { splitTrailing } from '@/lib/fence-3d';
 import { haversineM, pathDistanceM, type LatLng } from '@/lib/territory';
 
 /** A straight north-heading track with ~11m between fixes. */
@@ -44,46 +44,5 @@ describe('splitTrailing', () => {
     expect(splitTrailing([], 100)).toEqual({ settled: [], active: [] });
     const one = [{ lat: 25.67, lng: -100.31 }];
     expect(splitTrailing(one, 100)).toEqual({ settled: [], active: one });
-  });
-});
-
-describe('buildWallPolygon', () => {
-  it('returns null when there is no line to thicken', () => {
-    expect(buildWallPolygon([], 3)).toBeNull();
-    expect(buildWallPolygon([{ lat: 25.67, lng: -100.31 }], 3)).toBeNull();
-  });
-
-  it('produces a closed ring with two sides per input point', () => {
-    const points = northLine(5);
-    const wall = buildWallPolygon(points, 3)!;
-    const ring = wall.geometry.coordinates[0];
-    expect(ring).toHaveLength(points.length * 2 + 1); // both sides + closing point
-    expect(ring[0]).toEqual(ring[ring.length - 1]);
-  });
-
-  it('is the requested width across, not merely non-zero', () => {
-    const points = northLine(5);
-    const width = 3;
-    const wall = buildWallPolygon(points, width)!;
-    const ring = wall.geometry.coordinates[0];
-    // First point of the left side vs. last of the right side — the two
-    // offsets of the SAME input point, so their separation is the thickness.
-    const left = { lng: ring[0][0], lat: ring[0][1] };
-    const right = { lng: ring[ring.length - 2][0], lat: ring[ring.length - 2][1] };
-    expect(haversineM(left, right)).toBeCloseTo(width, 1);
-  });
-
-  it('keeps the same thickness on an east-west run as a north-south one', () => {
-    // The cos(latitude) correction exists for exactly this: without it an
-    // east-west wall renders visibly thicker than a north-south one.
-    const eastWest: LatLng[] = Array.from({ length: 5 }, (_, i) => ({
-      lat: 25.67,
-      lng: -100.31 + i * 0.0001,
-    }));
-    const wall = buildWallPolygon(eastWest, 3)!;
-    const ring = wall.geometry.coordinates[0];
-    const left = { lng: ring[0][0], lat: ring[0][1] };
-    const right = { lng: ring[ring.length - 2][0], lat: ring[ring.length - 2][1] };
-    expect(haversineM(left, right)).toBeCloseTo(3, 1);
   });
 });

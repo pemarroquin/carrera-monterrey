@@ -41,6 +41,7 @@ import type { Feature, FeatureCollection, MultiPolygon, Polygon as GeoPolygon } 
 
 import { Icon } from '@/components/ui/icon';
 import { BottomTabInset, Spacing } from '@/constants/theme';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import {
   EMISSIVE_STRENGTH_FULL,
   fenceColorForRun,
@@ -60,7 +61,7 @@ import {
 } from '@/constants/map';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
-import { outerRings, type LatLng } from '@/lib/territory';
+import { outerRings } from '@/lib/territory';
 import type { MyFence } from '@/lib/territory-sync';
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
@@ -71,6 +72,14 @@ const PAST_SRC = 'fence-past';
 const TILES_SRC = 'fence-tiles';
 const RIVAL_TILES_SRC = 'fence-rival-tiles';
 
+/**
+ * ONE POLYGON PER HEXAGON here, unlike track-map.web.tsx's function of the
+ * same name, which dissolves the set into one shape. Deliberate, and the
+ * owner's call: the running view wants the route plus a single covered area,
+ * while the summary is where the individual tiles are worth seeing. Same
+ * name because both answer "this cell set, as map features"; different
+ * bodies because the two screens want different answers.
+ */
 /** h3-js's cellToBoundary(h3, true) returns [lng,lat] pairs that do NOT
  *  repeat the first point at the end — valid for the app's own react-
  *  native-maps Polygon (fence-map.tsx), but GeoJSON polygon rings must be
@@ -102,8 +111,13 @@ interface FenceMapProps {
   geometry: GeoPolygon | MultiPolygon;
   /** The recorded route, MASKED (privacy-zone.ts) — never the raw path. This
    *  is a shareable surface; the whole reason privacy-zone trimming exists
-   *  is so start/end aren't exposed here. */
-  path: LatLng[];
+   *  is so start/end aren't exposed here.
+   *
+   *  Timestamped, and that is load-bearing: a saved run keeps the gaps it
+   *  was recorded with, and the caps deciding where this path must NOT be
+   *  drawn as one continuous line are a function of elapsed time as well as
+   *  distance (see splitLegs). */
+  path: TimedPoint[];
   /** Tile Coverage brief §6 step 4 — this run's covered H3 cells, rendered
    *  as the fill that used to be the enclosure polygon's. See fence-map.tsx
    *  (native)'s matching prop doc for the full reasoning. */
@@ -366,10 +380,26 @@ export function FenceMap({
         requestAnimationFrame(() => {
           if (cancelled) return;
           const routeSource = map.getSource(NEW_ROUTE_SRC) as GeoJSONSource | undefined;
+          // One Feature per leg, not one LineString across the whole path: a
+          // saved run keeps its unrecorded gaps, and a single line joins
+          // both sides of one with a straight chord across ground the runner
+          // never recorded (see splitLegs).
+          //
+          // Separate Features rather than one MultiLineString on purpose —
+          // `line-gradient` reads line-progress, which lineMetrics computes
+          // per feature, so each leg gets its own clean 0->1 gradient run.
           routeSource?.setData({
-            type: 'Feature',
-            properties: {},
-            geometry: { type: 'LineString', coordinates: p.map(({ lng, lat }) => [lng, lat]) },
+            type: 'FeatureCollection',
+            features: splitLegs(p)
+              .filter((leg) => leg.length >= 2)
+              .map((leg) => ({
+                type: 'Feature' as const,
+                properties: {},
+                geometry: {
+                  type: 'LineString' as const,
+                  coordinates: leg.map(({ lng, lat }) => [lng, lat] as [number, number]),
+                },
+              })),
           });
         });
 

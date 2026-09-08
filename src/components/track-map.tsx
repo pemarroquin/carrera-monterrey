@@ -26,7 +26,7 @@
 // camera was hardcoded `heading: 0` (never rotated to face the direction of
 // travel). Both are fixed below, reusing this repo's existing camera-control
 // button language 1:1 with web.
-import { cellToBoundary } from 'h3-js';
+import { cellsToMultiPolygon } from 'h3-js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type ColorValue } from 'react-native';
 import MapView, { Polygon, Polyline } from 'react-native-maps';
@@ -36,8 +36,6 @@ import { BottomTabInset, Spacing } from '@/constants/theme';
 import {
   type CameraMode,
   FENCE_LAG_M,
-  FENCE_RIBBON_WIDTH_M,
-  FENCE_WALL_OPACITY,
   FOLLOW_LOOKAHEAD_M,
   GOOGLE_DARK_MAP_STYLE,
   MAP_DEFAULT_ZOOM,
@@ -53,17 +51,35 @@ import {
   withAlpha,
   ZOOM_STEP,
 } from '@/constants/map';
-import { bearingFromPath, boundsOfPath, destinationPoint, smoothBearing } from '@/lib/camera';
-import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
-import { gradientStrokeColors, ringToCoords } from '@/lib/fence-draw';
+import {
+  bearingFromPath,
+  boundsOfPath,
+  destinationPoint,
+  overviewPadding,
+  smoothBearing,
+  type ChromeInsets,
+} from '@/lib/camera';
+import { splitTrailing } from '@/lib/fence-3d';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
+import { gradientStrokeColors } from '@/lib/fence-draw';
 import { useRegion } from '@/lib/region-context';
 import type { LatLng } from '@/lib/territory';
 
 interface TrackMapProps {
-  points: LatLng[];
+  /** The recorded path. Timestamped, and that is load-bearing: the gap caps
+   *  that decide where this path must NOT be drawn as a continuous line are
+   *  a function of elapsed time as well as distance (see splitLegs). A plain
+   *  LatLng[] here is what let the route render straight across an
+   *  unrecorded background gap. */
+  points: TimedPoint[];
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
+  /** Pixels of app chrome drawn OVER the map (live stats block up top, the
+   *  floating tab bar at the bottom). The camera frames against the band
+   *  these leave visible rather than the whole container — see camera.ts's
+   *  visibleBand. Optional: omitted means "nothing covers the map". */
+  chromeInsets?: ChromeInsets;
   /** True once a session is live: drives the fly-in and the tilted framing. */
   active: boolean;
   /** This run's fence colour ('#rrggbb') — see FENCE_COLOR_SETS. */
@@ -72,7 +88,7 @@ interface TrackMapProps {
    *  computed and throttled in index.tsx (same cadence as the enclosure
    *  ribbon below, LIVE_FILL_RECOMPUTE_MS/POINTS) and passed down ready to
    *  render, rather than recomputed inside this already-dense component.
-   *  ADDITIVE: the existing ribbon/wall (buildWallPolygon/splitTrailing)
+   *  ADDITIVE: the live edge (splitTrailing)
    *  is unchanged — see this file's own report note on why the live 3D/
    *  camera machinery here was treated as something to add alongside, not
    *  touch. */
@@ -113,21 +129,22 @@ function cameraFor(center: LatLng, zoom: number, pitch: number, heading = 0) {
   };
 }
 
-// Padding for MapView.fitToCoordinates in overview mode. EdgePadding wants
-// all four sides, unlike web's single-number OVERVIEW_FIT_PADDING_PX for
-// Mapbox GL's fitBounds — bottom gets extra so the fitted route doesn't
-// duck under the camera-controls cluster / bottom tab bar sitting there.
-const OVERVIEW_EDGE_PADDING = {
-  top: OVERVIEW_FIT_PADDING_PX,
-  right: OVERVIEW_FIT_PADDING_PX,
-  bottom: OVERVIEW_FIT_PADDING_PX + BottomTabInset + 96,
-  left: OVERVIEW_FIT_PADDING_PX,
-};
+/** No chrome over the map — what a caller that passes no insets gets. */
+const NO_CHROME: ChromeInsets = { top: 0, bottom: 0 };
+
+// Overview padding now comes from camera.ts's overviewPadding, shared with
+// web, rather than the hand-built EdgePadding this replaces. That version
+// allowed for the bottom chrome (BottomTabInset plus a further hard-coded
+// 96) but nothing for the TOP — where the live stats block is drawn over
+// the map — so it framed the run above the visible band's centre, the
+// mirror image of the web bug reported 2026-09-07. Both platforms now
+// measure against the same band.
 
 export function TrackMap({
   points,
   running,
   here,
+  chromeInsets,
   active,
   fenceColor,
   tiles,
@@ -162,6 +179,12 @@ export function TrackMap({
   // (camera.ts) has enough separation to derive one. Reset at the start of
   // each session, same as web: a new session has no known direction yet.
   const bearingRef = useRef<number | null>(null);
+  // Mirrored into a ref: the camera is applied from timers and callbacks,
+  // not only from a render, so it must read the current insets.
+  const chromeInsetsRef = useRef<ChromeInsets>(chromeInsets ?? NO_CHROME);
+  useEffect(() => {
+    chromeInsetsRef.current = chromeInsets ?? NO_CHROME;
+  }, [chromeInsets]);
 
   // Only ever a fallback for the *initial* camera, and only while no real
   // fix exists — a map of your metro beats an empty rectangle, and it needs
@@ -196,7 +219,10 @@ export function TrackMap({
           { latitude: bounds.south, longitude: bounds.west },
           { latitude: bounds.north, longitude: bounds.east },
         ],
-        { edgePadding: OVERVIEW_EDGE_PADDING, animated: true },
+        {
+          edgePadding: overviewPadding(chromeInsetsRef.current, OVERVIEW_FIT_PADDING_PX),
+          animated: true,
+        },
       );
       // fitToCoordinates has no bearing/pitch/duration parameters of its
       // own (a react-native-maps limitation, not a choice here) — flatten
@@ -323,14 +349,26 @@ export function TrackMap({
   // run's colour, since react-native-maps has no fill-extrusion — while the
   // newest stretch stays the vibrant gradient line. The two share their join
   // point, so the line feeds visually into the fence.
-  const { settled, active: liveEdge } = useMemo(
-    () => splitTrailing(points, FENCE_LAG_M),
-    [points],
+  // Legs FIRST — `points` is one flat array with no record of its own seams,
+  // so drawing straight from it joins the two sides of an unrecorded gap
+  // with a straight line (reported on the web build with screenshots
+  // 2026-09-07; the same flat-array assumption is here). splitLegs cuts
+  // exactly where pathToTiles already refuses to bridge.
+  const legs = useMemo(() => splitLegs(points), [points]);
+  const { active: liveEdge } = useMemo(
+    // The live edge can only be in the newest leg, by definition.
+    () => splitTrailing(legs.length > 0 ? legs[legs.length - 1] : [], FENCE_LAG_M),
+    [legs],
   );
-  const ribbonCoords = useMemo(() => {
-    const wall = buildWallPolygon(settled, FENCE_RIBBON_WIDTH_M);
-    return wall ? ringToCoords(wall.geometry.coordinates[0]) : null;
-  }, [settled]);
+  // No ribbon any more. It was a flat filled polygon tracing the path, and
+  // react-native-maps has no fill-extrusion, so it duplicated exactly what
+  // the tile polygons below already draw — while ALSO stacking its own
+  // opacity wherever the path doubled back (one ring that self-intersects
+  // triangulates into overlapping triangles). Reported 2026-09-07: the
+  // fence should mark total area, not how many times it was crossed. The
+  // tiles are H3 cells, deduplicated and non-overlapping by construction,
+  // so they cannot stack. Web keeps a wall because it has a real extrusion
+  // — and that wall is now the same tile footprint.
   const edgeCoords = useMemo(
     () => liveEdge.map((p) => ({ latitude: p.lat, longitude: p.lng })),
     [liveEdge],
@@ -341,8 +379,29 @@ export function TrackMap({
   // (a visual "trail so far"), tiles are the actual claimed-ground fill.
   // cellToBoundary's default [lat,lng] pairs are already react-native-maps'
   // {latitude,longitude} order once mapped.
+  // ONE dissolved shape per region, not one polygon per hexagon.
+  // cellsToMultiPolygon merges the set — the same call enclosure.ts uses to
+  // find enclosed ground, so the two cannot disagree about the boundary.
+  //
+  // Enclosure changed the scale here: a run used to claim a few hundred
+  // cells along its path, and a 10 km loop now claims ~25,900. Mounting
+  // 25,900 <Polygon> components is not something react-native-maps should
+  // be asked to do. Dissolving also drops the internal edges, so territory
+  // reads as one area rather than a quilt.
+  //
+  // Holes are dropped: react-native-maps takes an outer ring plus a
+  // separate `holes` prop, and an enclosed region is claimed ground here
+  // anyway (that is what enclosure means), so there is nothing to cut out.
   const tilePolys = useMemo(
-    () => tiles.map((h3) => ({ h3, coords: cellToBoundary(h3).map(([lat, lng]) => ({ latitude: lat, longitude: lng })) })),
+    () =>
+      tiles.length === 0
+        ? []
+        : cellsToMultiPolygon(tiles).map((rings, i) => ({
+            key: `tile-region-${i}`,
+            // Default (non-GeoJSON) output is [lat, lng], already
+            // react-native-maps' order once mapped.
+            coords: rings[0].map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+          })),
     [tiles],
   );
 
@@ -368,21 +427,14 @@ export function TrackMap({
             on top of the real claimed-ground fill. */}
         {tilePolys.map((p) => (
           <Polygon
-            key={`tile-${p.h3}`}
+            key={p.key}
             coordinates={p.coords}
             fillColor={withAlpha(fenceColor, TILE_FILL_OPACITY)}
             strokeColor={withAlpha(fenceColor, 0.0)}
             strokeWidth={0}
           />
         ))}
-        {ribbonCoords && (
-          <Polygon
-            coordinates={ribbonCoords}
-            fillColor={withAlpha(fenceColor, FENCE_WALL_OPACITY)}
-            strokeColor={withAlpha(fenceColor, 0.9)}
-            strokeWidth={1}
-          />
-        )}
+
         {edgeCoords.length >= 2 && (
           <Polyline
             coordinates={edgeCoords}

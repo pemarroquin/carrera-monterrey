@@ -1,148 +1,155 @@
-// claimTiles — the Tile Coverage Model's actual claim/first-to-claim/rival
-// accounting (territory-sync.ts, brief §2/§2.5/§3). Same reasoning as
-// territory-sync-delete.test.ts's own header: importing '@/lib/territory-sync'
+// claimTiles — the client half of CONQUEST (territory-sync.ts +
+// supabase/migrations/20260908010000_conquest.sql). Same reasoning as
+// territory-sync-delete.test.ts's header: importing '@/lib/territory-sync'
 // for real pulls in @supabase/supabase-js, which schedules an internal timer
-// that throws under Node, so '@/lib/supabase' is mocked completely with a
-// minimal chainable stand-in for the exact `.from(...).method(...).method(...)`
-// shapes claimTiles calls.
+// that throws under Node, so '@/lib/supabase' is mocked with a minimal
+// stand-in for the exact call shapes claimTiles makes.
 //
-// What this does NOT cover: the actual §2.5 forgery-guard SQL trigger, or
-// the real ON CONFLICT DO NOTHING semantics — those only exist once the
-// migration is applied against a real Postgres instance (this suite is
-// `environment: 'node'`, no database). This only proves claimTiles'
-// TypeScript-side branching (how it reacts to what Postgres WOULD return)
-// is correct, not that Postgres actually returns those shapes — see the
-// executor's report.
+// Claiming moved server-side, so this file changed shape with it. It used to
+// mock three client statements (insert visits, upsert tiles, read rivals);
+// there is now one rpc() plus one read for the rival cell IDs. The ordering
+// rule itself — "a tile only passes to a strictly newer run" — is SQL and is
+// not covered here at all.
+//
+// What this does NOT cover: the claim function's own body, the plausibility
+// trigger, the window and future-date checks, or the conditional upsert.
+// Those exist only against a real Postgres and this suite is
+// `environment: 'node'`. This proves claimTiles' TypeScript branching (how
+// it reacts to what Postgres WOULD return) is correct, not that Postgres
+// returns those shapes.
 import { describe, expect, it, vi } from 'vitest';
 
-interface Row {
-  h3: string;
-  [key: string]: unknown;
-}
-
-let nextVisitError: { message: string } | null = null;
-let nextClaimed: { h3: string }[] | null = null;
-let nextClaimError: { message: string } | null = null;
+let nextRpc: { data: unknown; error: { message: string } | null } = { data: null, error: null };
 let nextExisting: { h3: string; owner_id: string }[] | null = null;
-
-function makeFrom(table: string) {
-  if (table === 'tile_visits') {
-    return {
-      insert: (_rows: Row[]) => Promise.resolve({ error: nextVisitError }),
-    };
-  }
-  // territory_tiles — three independent chains, matching claimTiles' three
-  // distinct call shapes exactly. Each `.upsert()`/`.update()`/`.select()`
-  // call returns its OWN chain object, so the two different `.in()` calls
-  // (one off `.update()`, one off `.select()`) never collide.
-  return {
-    upsert: (_rows: Row[], _opts: unknown) => ({
-      select: (_cols: string) => Promise.resolve({ data: nextClaimed, error: nextClaimError }),
-    }),
-    update: (_patch: Record<string, unknown>) => ({
-      in: (_col: string, _vals: string[]) => Promise.resolve({ data: [], error: null }),
-    }),
-    select: (_cols: string) => ({
-      in: (_col: string, _vals: string[]) => Promise.resolve({ data: nextExisting, error: null }),
-    }),
-  };
-}
+let rpcCalls = 0;
 
 vi.mock('@/lib/supabase', () => ({
-  supabase: { from: (table: string) => makeFrom(table) },
+  supabase: {
+    rpc: (_fn: string, _args: unknown) => {
+      rpcCalls++;
+      return Promise.resolve(nextRpc);
+    },
+    from: (_table: string) => ({
+      select: (_cols: string) => ({
+        in: (_col: string, _vals: string[]) => Promise.resolve({ data: nextExisting, error: null }),
+      }),
+    }),
+  },
   ensureSession: async () => ({ user: { id: 'me' } }),
   TERRITORY_ENABLED: true,
 }));
 
 const { claimTiles } = await import('@/lib/territory-sync');
 
+/** The function returns `returns table(...)`, which PostgREST delivers as an
+ *  array of one row. */
+const rpcOk = (claimed: number, taken: number, skipped_older: number) => ({
+  data: [{ claimed, taken, skipped_older }],
+  error: null,
+});
+
 describe('claimTiles', () => {
-  it('returns an all-zero result for an empty cell list without touching the network', () => {
-    // No mock state configured — if this reached the network paths at all
-    // it would resolve against stale/null fixtures from a previous test and
-    // likely fail, which is itself a decent tripwire.
-    return claimTiles('run-1', [], 'mty').then((outcome) => {
-      expect(outcome).toEqual({
-        ok: true,
-        result: { claimedCount: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] },
-      });
+  it('returns an all-zero result for an empty cell list without touching the network', async () => {
+    rpcCalls = 0;
+    const outcome = await claimTiles('run-1', [], 'mty');
+    expect(outcome).toEqual({
+      ok: true,
+      result: { claimedCount: 0, takenCount: 0, skippedOlder: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] },
+    });
+    expect(rpcCalls).toBe(0);
+  });
+
+  it('passes the server counts straight through', async () => {
+    nextRpc = rpcOk(2, 0, 0);
+    nextExisting = null; // must not be read — nothing was skipped
+    const outcome = await claimTiles('run-1', ['a', 'b'], 'mty');
+    expect(outcome).toEqual({
+      ok: true,
+      result: { claimedCount: 2, takenCount: 0, skippedOlder: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] },
     });
   });
 
-  it('reports every submitted cell as newly claimed when none conflict', () => {
-    nextVisitError = null;
-    // ON CONFLICT DO NOTHING's RETURNING only echoes back the rows that were
-    // actually inserted — here, everything.
-    nextClaimed = [{ h3: 'a' }, { h3: 'b' }];
-    nextExisting = null; // must not even be read — notNewlyClaimed is empty
-    return claimTiles('run-1', ['a', 'b'], 'mty').then((outcome) => {
-      expect(outcome).toEqual({
-        ok: true,
-        result: { claimedCount: 2, rivalTiles: 0, rivalRunners: 0, rivalCells: [] },
-      });
-    });
+  it('separates ground TAKEN off a rival from brand-new ground', async () => {
+    // Conquest's whole point: winning a tile off someone is a different
+    // achievement from claiming empty ground, and the summary says so.
+    nextRpc = rpcOk(1, 3, 0);
+    const outcome = await claimTiles('run-1', ['a', 'b', 'c', 'd'], 'mty');
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.result.claimedCount).toBe(1);
+    expect(outcome.result.takenCount).toBe(3);
   });
 
-  it('splits newly-claimed from rival tiles, and counts distinct rival owners not rows', () => {
-    nextVisitError = null;
-    // Only 'a' won the ON CONFLICT DO NOTHING race — 'b' and 'c' already
-    // belonged to someone else.
-    nextClaimed = [{ h3: 'a' }];
+  it('reads rival cell IDs only when the run actually lost some ground', async () => {
+    nextRpc = rpcOk(1, 0, 2);
     nextExisting = [
       { h3: 'b', owner_id: 'rival-1' },
-      { h3: 'c', owner_id: 'rival-1' }, // same rival owns both — one runner, two tiles
+      { h3: 'c', owner_id: 'rival-1' }, // one runner, two tiles
     ];
-    return claimTiles('run-1', ['a', 'b', 'c'], 'mty').then((outcome) => {
-      expect(outcome.ok).toBe(true);
-      if (!outcome.ok) return;
-      expect(outcome.result.claimedCount).toBe(1);
-      expect(outcome.result.rivalTiles).toBe(2);
-      // Distinct owners, not rows — same "count people, not events" rule as
-      // the old spoils banner's runnersAffected.
-      expect(outcome.result.rivalRunners).toBe(1);
-      expect(outcome.result.rivalCells.sort()).toEqual(['b', 'c']);
-    });
+    const outcome = await claimTiles('run-1', ['a', 'b', 'c'], 'mty');
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.result.skippedOlder).toBe(2);
+    expect(outcome.result.rivalTiles).toBe(2);
+    // Distinct owners, not rows — count people, not events.
+    expect(outcome.result.rivalRunners).toBe(1);
+    expect(outcome.result.rivalCells.sort()).toEqual(['b', 'c']);
   });
 
-  it('never counts a tile this session already owns as a rival', () => {
-    nextVisitError = null;
-    nextClaimed = [{ h3: 'a' }];
-    // 'b' shows up as "not newly claimed" (raced and lost) but its owner IS
-    // this same session — must not inflate rivalTiles/rivalCells.
+  it('never counts a tile this session already owns as a rival', async () => {
+    nextRpc = rpcOk(1, 0, 1);
     nextExisting = [{ h3: 'b', owner_id: 'me' }];
-    return claimTiles('run-1', ['a', 'b'], 'mty').then((outcome) => {
-      expect(outcome.ok).toBe(true);
-      if (!outcome.ok) return;
-      expect(outcome.result.rivalTiles).toBe(0);
-      expect(outcome.result.rivalCells).toEqual([]);
-    });
+    const outcome = await claimTiles('run-1', ['a', 'b'], 'mty');
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.result.rivalTiles).toBe(0);
+    expect(outcome.result.rivalCells).toEqual([]);
   });
 
-  it('reports "rejected", not "network", when the §2.5 forgery guard fires', () => {
-    // The exact shape a plpgsql RAISE EXCEPTION comes back as via PostgREST
-    // — an {error} with our own message text, no thrown JS exception.
-    nextVisitError = {
-      message: 'TILE_FORGERY_GUARD: run run-1 has 9001 distinct claimed tiles total, which exceeds the plausible bound of 30',
+  it('reports "rejected", not "network", when the forgery guard fires', () => {
+    // The exact shape a plpgsql RAISE EXCEPTION comes back as through
+    // PostgREST — an {error} carrying our own message, no thrown exception.
+    nextRpc = {
+      data: null,
+      error: { message: 'TILE_FORGERY_GUARD: run run-1 has 9001 distinct claimed tiles total' },
     };
-    return claimTiles('run-1', ['a'], 'mty').then((outcome) => {
-      expect(outcome).toEqual({ ok: false, reason: 'rejected' });
-    });
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'rejected' }));
   });
 
-  it('reports "network" for any other tile_visits insert error', () => {
-    nextVisitError = { message: 'connection refused' };
-    return claimTiles('run-1', ['a'], 'mty').then((outcome) => {
-      expect(outcome).toEqual({ ok: false, reason: 'network' });
-    });
+  it('reports "rejected" when the claim exceeds what the distance could enclose', () => {
+    nextRpc = {
+      data: null,
+      error: { message: 'CLAIM_IMPLAUSIBLE: run run-1 claims 500000 tiles, above the bound of 900 for 1000m' },
+    };
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'rejected' }));
   });
 
-  it('reports "network" when the territory_tiles claim itself fails', () => {
-    nextVisitError = null;
-    nextClaimed = null;
-    nextClaimError = { message: 'boom' };
-    return claimTiles('run-1', ['a'], 'mty').then((outcome) => {
-      expect(outcome).toEqual({ ok: false, reason: 'network' });
-      nextClaimError = null; // reset for later tests
-    });
+  it('reports "tooOld" — neither a bug nor an accusation — past the claim window', () => {
+    // The runner did nothing wrong; the upload simply arrived too late to
+    // compete. Collapsing this into 'network' would tell them to check their
+    // connection, and into 'rejected' would imply they cheated.
+    nextRpc = {
+      data: null,
+      error: { message: 'CLAIM_TOO_OLD: run run-1 ended 14:02:00 ago, past the 12:00:00 window' },
+    };
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'tooOld' }));
+  });
+
+  it('reports "rejected" when the claim is for ground the run never recorded', () => {
+    // The targeted forgery the tile-coverage migration explicitly left open:
+    // a plausible tile COUNT for the distance, but cells from a
+    // neighbourhood the runner never went near. An honest client cannot
+    // produce this, so it groups with the other two rejections rather than
+    // getting runner-facing copy of its own.
+    nextRpc = {
+      data: null,
+      error: { message: 'CLAIM_OFF_PATH: run run-1 claims 214 tiles outside the ground it recorded' },
+    };
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'rejected' }));
+  });
+
+  it('reports "network" for any other claim failure', () => {
+    nextRpc = { data: null, error: { message: 'connection refused' } };
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'network' }));
   });
 });

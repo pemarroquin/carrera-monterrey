@@ -59,6 +59,20 @@ export interface MaskResult {
   /** True when the ENTIRE run fell inside the zone, so nothing can be
    *  uploaded without revealing the home area. Caller must not upload. */
   fullyInsideZone: boolean;
+  /**
+   * The jittered cut distance actually used for THIS run, metres, or null
+   * when no zone is set.
+   *
+   * Exposed for enclosure (enclosure.ts): a loop that starts and ends at
+   * home encloses ground around the home, and those cells have to be
+   * dropped before upload. They must be dropped at THIS cut, not at the
+   * nominal radius — a fixed-radius bite out of the claimed area puts a
+   * circle of known radius around the home on every run, and three of them
+   * determine its centre. That is the exact attack the jitter above exists
+   * to defeat, and it would be reintroduced by the claimed tiles even
+   * though the uploaded path was masked correctly.
+   */
+  cutM: number | null;
 }
 
 /**
@@ -90,6 +104,7 @@ export function maskPath(
       trimmedEnd: 0,
       masked: false,
       fullyInsideZone: false,
+      cutM: null,
     };
   }
 
@@ -109,6 +124,7 @@ export function maskPath(
       trimmedEnd: 0,
       masked: true,
       fullyInsideZone: true,
+      cutM: cut,
     };
   }
 
@@ -122,6 +138,7 @@ export function maskPath(
     trimmedEnd: points.length - 1 - end,
     masked: start > 0 || end < points.length - 1,
     fullyInsideZone: false,
+    cutM: cut,
   };
 }
 

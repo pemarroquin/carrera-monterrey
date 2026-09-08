@@ -68,9 +68,19 @@ export const MAP_DEFAULT_ZOOM = 15;
 export const ROUTE_LINE_COLOR = '#E4572E';
 /** Same colour without '#', for Static Images URL overlays. */
 export const ROUTE_LINE_COLOR_URL = 'e4572e';
-export const ROUTE_LINE_WIDTH = 5;
+/**
+ * Halved 2026-09-08 (5 -> 2.5), Pedro's call: the gradient line read as too
+ * heavy on every surface that draws it. The glow below is halved with it so
+ * the proportion between line and halo is unchanged — the style is the same,
+ * just finer.
+ *
+ * ONE constant for every surface: the live edge (track-map), the run summary
+ * (fence-map) and saved territories (territories-map) all read it, which is
+ * what keeps a route looking like the same route wherever it appears.
+ */
+export const ROUTE_LINE_WIDTH = 2.5;
 /** Wider, blurred copy under the main line — reads as a glow on dark ground. */
-export const ROUTE_GLOW_WIDTH = 14;
+export const ROUTE_GLOW_WIDTH = 7;
 export const ROUTE_GLOW_BLUR = 3;
 export const ROUTE_GLOW_OPACITY = 0.35;
 
@@ -172,6 +182,30 @@ export const LIVE_FILL_PULSE_MS = 2600;
  * outline carries the shared iridescent gradient.
  */
 export const LIVE_FILL_OUTLINE_WIDTH = 2.5;
+
+/**
+ * Saved territories cycle their fill through the full ROUTE_GRADIENT hue
+ * wheel instead of sitting on one flat colour — Pedro's ask, 2026-09-08:
+ * "gradient vibrant and colourful like the Apple shimmer, with the smooth
+ * animation".
+ *
+ * Done in TIME rather than in space, and that is a real constraint rather
+ * than a shortcut: Mapbox GL has no positional gradient for fills. Only
+ * LINES take one (`line-gradient` over line-progress), which is why the
+ * territory OUTLINE already carries the spatial gradient — see
+ * LIVE_FILL_OUTLINE_WIDTH's comment. A fill can only be given a pattern
+ * image, which tiles visibly on an extrusion. So the fill sweeps the same
+ * wheel over time while the edge holds it across space, and together they
+ * read as one shimmering surface.
+ *
+ * The smoothness is the GPU's, not a render loop's:
+ * `fill-extrusion-color-transition` is set to this same duration, so GL
+ * interpolates between each pair of stops. Same technique as the live map's
+ * opacity breathe (LIVE_FILL_PULSE_MS), for the same reason — a rAF loop
+ * repainting a map layer 60 times a second is a battery cost mid-run.
+ */
+export const FENCE_SHIMMER_STEP_MS = 2200;
+
 
 /**
  * The route/territory gradient — a full 12-colour HUE WHEEL, in order, each
@@ -282,14 +316,6 @@ export const ROUTE_GRADIENT_FRAME_MS = 60;
 
 /** Trailing distance that stays a flat line before the route sets into wall. */
 export const FENCE_LAG_M = 100;
-/** Wall thickness on the ground, metres (web — the 3D extrusion gets its
- *  visual bulk from height, so the footprint stays thin). */
-export const FENCE_WALL_WIDTH_M = 3;
-/** Ribbon width on native, metres. The native fence is a FLAT filled ribbon
- *  (react-native-maps has no fill-extrusion), so without the 18m of wall
- *  height it needs a wider footprint to read as a fence at all — 3m is
- *  ~4px at the session zoom. */
-export const FENCE_RIBBON_WIDTH_M = 8;
 /** Wall height, metres. */
 export const FENCE_WALL_HEIGHT_M = 18;
 export const FENCE_WALL_OPACITY = 0.55;
@@ -391,14 +417,27 @@ export const MAX_BEARING_STEP_DEG = 45;
 
 /**
  * Web only (Mapbox GL's `offset` camera option, in pixels, is screen-space
- * and zoom-independent — see track-map.web.tsx). Fraction of the map
- * container's height the follow camera's target is pushed DOWN-screen, so
- * the runner sits toward the lower third of the viewport and more map shows
- * ahead of them than behind — the Apple/Google Maps turn-by-turn framing
- * Pedro asked to match. 0.28 reads as "lower third" without crowding the
- * camera-controls cluster that already sits bottom-right.
+ * and zoom-independent — see track-map.web.tsx). Fraction of the VISIBLE
+ * map band's height the follow camera's target is pushed DOWN-screen, so
+ * the runner sits toward the lower third of what they can actually see and
+ * more map shows ahead of them than behind — the Apple/Google Maps
+ * turn-by-turn framing Pedro asked to match.
+ *
+ * Changed 2026-09-07 (0.28 of the CONTAINER -> 0.167 of the visible band)
+ * after the route was reported sitting lower on screen than it should.
+ * Both halves of that were wrong:
+ *
+ *  - 0.28 below the centre is 78% of the way down — the lower QUARTER, not
+ *    the "lower third" this comment claimed. 1/6 of a height below its
+ *    centre is exactly two thirds of the way down it.
+ *  - Measured against the raw container it ignored the chrome drawn over
+ *    the map: the live stats block up top and the floating tab bar at the
+ *    bottom. See camera.ts's followOffsetPx and visibleBand.
+ *
+ * This is the knob for that framing: raise it to sit lower with more road
+ * ahead, drop it to 0 to sit dead-centre in the visible band.
  */
-export const FOLLOW_OFFSET_RATIO = 0.28;
+export const FOLLOW_OFFSET_RATIO = 0.167;
 
 /**
  * Native only (track-map.tsx). react-native-maps has no pixel-offset camera

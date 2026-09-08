@@ -4,7 +4,8 @@
 // ranked list, so two runners called "Pedro" are indistinguishable exactly
 // where it matters most. Uniqueness itself is enforced by the database
 // (supabase/migrations/20260907120000_unique_display_name.sql) — the index
-// is the rule, the same way territory_tiles' primary key IS first-to-claim.
+// is the rule, the same way territory_tiles' own constraints ARE the
+// ownership model rather than something re-checked in TypeScript.
 // This module only holds what can be decided WITHOUT a round trip: the
 // handful of names nobody may take.
 //

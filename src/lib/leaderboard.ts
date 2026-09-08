@@ -134,8 +134,10 @@ export function regionsWithRuns(runs: LeaderboardRun[]): string[] {
 // dead code kept for audit/comparison until that removal happens.
 //
 // Why this is simpler than the union pipeline it replaces, not just newer:
-// first-to-claim means one tile has exactly one owner, ever (no decay in
-// this pass — brief §2). Ranking is therefore a plain count of
+// one tile has exactly one owner AT A TIME. It is no longer forever —
+// conquest (20260908010000) lets a later run take a tile — but ownership is
+// still single-valued at any moment, which is all the ranking needs.
+// Ranking is therefore a plain count of
 // territory_tiles rows per owner, no turf, no polygon union, no "did these
 // two fences overlap" question at all — the DB schema itself already
 // answers "who owns this ground" per tile.

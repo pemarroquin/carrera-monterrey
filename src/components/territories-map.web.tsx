@@ -41,6 +41,7 @@ import type { Feature, FeatureCollection, MultiPolygon, Polygon as GeoPolygon } 
 
 import {
   EMISSIVE_STRENGTH_FULL,
+  FENCE_SHIMMER_STEP_MS,
   FENCE_WALL_HEIGHT_M,
   FENCE_WALL_OPACITY,
   fenceColorForRun,
@@ -49,6 +50,7 @@ import {
   MAP_SLOT_ROUTE,
   MAP_STYLE_GL,
   ROUTE_GRADIENT,
+  ROUTE_GRADIENT_COLORS,
   ROUTE_LINE_WIDTH,
 } from '@/constants/map';
 import { lineGradientExpression } from '@/lib/fence-draw';
@@ -139,6 +141,10 @@ export function TerritoriesMap({ features, onSelect }: TerritoriesMapProps) {
   // simply paints a different set of layers.
   const flowIdsRef = useRef<Map<string, string[]>>(new Map());
   const flowLayersRef = useRef<string[]>([]);
+  // The saved territories' extrusion layers, kept in the same shape as the
+  // flow ids above so both are torn down by the same code paths.
+  const shimmerIdsRef = useRef<Map<string, string[]>>(new Map());
+  const shimmerLayersRef = useRef<string[]>([]);
   // The freshest feature list, read by sync() below rather than closed over.
   // The map's own 'load' handler is registered once, inside a mount effect
   // that can never see a later render's props — but it is also the FIRST
@@ -169,6 +175,7 @@ export function TerritoriesMap({ features, onSelect }: TerritoriesMapProps) {
       removeFeatureLayers(map, key);
       mountedIdsRef.current.delete(key);
       flowIdsRef.current.delete(key);
+      shimmerIdsRef.current.delete(key);
     }
 
     // Add layers/sources for anything new. Existing ones are left alone —
@@ -178,12 +185,16 @@ export function TerritoriesMap({ features, onSelect }: TerritoriesMapProps) {
     for (const f of features) {
       const key = `${f.kind}:${f.id}`;
       if (mountedIdsRef.current.has(key)) continue;
-      const flowIds = addFeatureLayers(map, f, key, (id, kind) => onSelectRef.current(id, kind));
+      const { flowIds, shimmerIds } = addFeatureLayers(map, f, key, (id, kind) =>
+        onSelectRef.current(id, kind),
+      );
       mountedIdsRef.current.add(key);
       if (flowIds.length > 0) flowIdsRef.current.set(key, flowIds);
+      if (shimmerIds.length > 0) shimmerIdsRef.current.set(key, shimmerIds);
     }
 
     flowLayersRef.current = [...flowIdsRef.current.values()].flat();
+    shimmerLayersRef.current = [...shimmerIdsRef.current.values()].flat();
 
     const bounds = boundsOfAll(features);
     if (bounds) map.fitBounds(bounds, { padding: 64, duration: 900 });
@@ -240,6 +251,8 @@ export function TerritoriesMap({ features, onSelect }: TerritoriesMapProps) {
       mountedIdsRef.current = new Set();
       flowIdsRef.current = new Map();
       flowLayersRef.current = [];
+      shimmerIdsRef.current = new Map();
+      shimmerLayersRef.current = [];
     };
     // Built once; `sync` is stable, and all data flows through the ref it
     // reads.
@@ -281,6 +294,35 @@ export function TerritoriesMap({ features, onSelect }: TerritoriesMapProps) {
     });
   }, [hasSaved]);
 
+  // The fill shimmer. ONE timer for the screen, same as the gradient flow
+  // above and gated the same way — only saved territories have an extrusion,
+  // so a screen of pending runs starts no timer at all.
+  //
+  // It only advances the hue; the smoothness is GL's, via the
+  // `fill-extrusion-color-transition` set when the layer is added. Mapbox has
+  // no positional gradient for fills (only lines take `line-gradient`, which
+  // is why the OUTLINE carries the gradient across space), so the fill sweeps
+  // the same wheel through time instead and the two read as one surface.
+  useEffect(() => {
+    if (!hasSaved) return;
+    let step = 0;
+    const id = setInterval(() => {
+      const map = mapRef.current;
+      if (!map || !readyRef.current) return;
+      step = (step + 1) % ROUTE_GRADIENT_COLORS.length;
+      shimmerLayersRef.current.forEach((layerId, i) => {
+        // Phase-offset per territory so several on screen sweep in
+        // succession rather than strobing in unison.
+        const colour = ROUTE_GRADIENT_COLORS[(step + i) % ROUTE_GRADIENT_COLORS.length];
+        // Same guard as the flow loop: a missing layer makes Mapbox fire an
+        // error event rather than throw, which at this cadence would be a
+        // silent flood.
+        if (map.getLayer(layerId)) map.setPaintProperty(layerId, 'fill-extrusion-color', colour);
+      });
+    }, FENCE_SHIMMER_STEP_MS);
+    return () => clearInterval(id);
+  }, [hasSaved]);
+
   if (!TOKEN) return null;
 
   return (
@@ -300,12 +342,15 @@ function addFeatureLayers(
   f: TerritoryFeature,
   key: string,
   onSelect: (id: string, kind: 'saved' | 'pending') => void,
-): string[] {
+): { flowIds: string[]; shimmerIds: string[] } {
   const fillSrc = `terr-fill-${key}`;
   const routeSrc = `terr-route-${key}`;
   const rimSrc = `terr-rim-${key}`;
   const color = f.kind === 'saved' ? fenceColorForRun(f.startedAtMs).color : PENDING_COLOR;
   const flowIds: string[] = [];
+  // Saved territories only — a pending run has no per-run colour and must
+  // keep reading as "not confirmed" rather than joining the shimmer.
+  const shimmerIds: string[] = [];
 
   map.addSource(fillSrc, {
     type: 'geojson',
@@ -324,11 +369,18 @@ function addFeatureLayers(
       slot: MAP_SLOT_FILL,
       paint: {
         'fill-extrusion-color': color,
+        // The shimmer's smoothness lives HERE, not in a render loop: the
+        // timer only sets the next hue, and GL interpolates across this
+        // duration on the GPU. Same technique as the live map's opacity
+        // breathe — a rAF loop repainting a map layer 60 times a second is a
+        // battery cost, and this is a screen a runner may leave open.
+        'fill-extrusion-color-transition': { duration: FENCE_SHIMMER_STEP_MS, delay: 0 },
         'fill-extrusion-height': FENCE_WALL_HEIGHT_M,
         'fill-extrusion-opacity': FENCE_WALL_OPACITY,
         'fill-extrusion-emissive-strength': EMISSIVE_STRENGTH_FULL,
       },
     });
+    shimmerIds.push(`${fillSrc}-extrusion`);
   } else {
     // Pending: flat, low-opacity fill + dashed outline. No extrusion, no
     // per-run colour — deliberately reads as "not confirmed" rather than as
@@ -441,7 +493,7 @@ function addFeatureLayers(
     });
   }
 
-  return flowIds;
+  return { flowIds, shimmerIds };
 }
 
 /**

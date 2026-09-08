@@ -9,8 +9,8 @@
 // gridPathCells, cellToBoundary, cellToParent.
 import { getResolution, gridPathCells, latLngToCell } from 'h3-js';
 
-import { MAX_BRIDGE_DISTANCE_M, MAX_BRIDGE_SPEED_MS } from '@/lib/gap-policy';
-import { haversineM, type LatLng } from '@/lib/territory';
+import { planGapClosures } from '@/lib/gap-policy';
+import type { LatLng } from '@/lib/territory';
 
 /**
  * H3 resolution for claimed tiles: ~10.8 m edge, ~307 m² per tile.
@@ -169,28 +169,21 @@ export function pathToTiles(path: TilePoint[], res: number = DEFAULT_TILE_RES): 
   let prevCell: string | null = null;
   let prevPoint: TilePoint | null = null;
 
-  for (const p of path) {
+  // ONE decision about which gaps close, shared with the map components'
+  // splitLegs — see planGapClosures. Before this each side applied the caps
+  // itself, which is how the recorder and the tile builder came to disagree
+  // about the same physical gap on a real run.
+  const plan = planGapClosures(path);
+  bridgesSkippedSpeed = plan.skippedSpeed;
+  bridgesSkippedDistance = plan.skippedBudget;
+
+  for (let i = 0; i < path.length; i++) {
+    const p = path[i];
     const cell = latLngToCell(p.lat, p.lng, res);
     direct.add(cell);
 
     if (prevCell !== null && prevCell !== cell && prevPoint !== null) {
-      const dtS = (p.ts - prevPoint.ts) / 1000;
-      const distM = haversineM(prevPoint, p);
-      // dtS <= 0 (out-of-order or identical timestamps) can't imply a real
-      // speed — treated as implausible rather than divided by zero/negative,
-      // so a bad pair of timestamps fails safe (no bridge) instead of
-      // silently passing the check.
-      const impliedSpeedMs = dtS > 0 ? distM / dtS : Infinity;
-
-      if (impliedSpeedMs > MAX_BRIDGE_SPEED_MS) {
-        // Leave the hole. Bridging here would claim ground the runner
-        // never ran over at all — see MAX_BRIDGE_SPEED_MS's own doc.
-        bridgesSkippedSpeed += 1;
-      } else if (distM > MAX_BRIDGE_DISTANCE_M) {
-        // Physically possible, but a straight line here is a guess about
-        // which streets they took — see MAX_BRIDGE_DISTANCE_M's own doc.
-        bridgesSkippedDistance += 1;
-      } else {
+      if (plan.bridged[i]) {
         try {
           const line = gridPathCells(prevCell, cell);
           for (const c of line) gapFilled.add(c);

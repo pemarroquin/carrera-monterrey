@@ -31,7 +31,7 @@
 // the fill's own rim, FILL_OUTLINE_SRC) flows ROUTE_GRADIENT along itself
 // via gradient-flow.ts. Both are plain setInterval timers, not
 // requestAnimationFrame loops — see the pulse-dot comment below.
-import { cellToBoundary } from 'h3-js';
+import { cellsToMultiPolygon } from 'h3-js';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import type { GeoJSONSource, Map as MapboxMap, Marker } from 'mapbox-gl';
 import mapboxGlPkg from 'mapbox-gl/package.json';
@@ -50,7 +50,6 @@ import {
   FENCE_WALL_COLOR,
   FENCE_WALL_HEIGHT_M,
   FENCE_WALL_OPACITY,
-  FENCE_WALL_WIDTH_M,
   FOLLOW_OFFSET_RATIO,
   LIVE_FILL_OPACITY_HIGH,
   LIVE_FILL_OPACITY_LOW,
@@ -77,12 +76,26 @@ import {
   TILE_FILL_OPACITY,
   ZOOM_STEP,
 } from '@/constants/map';
-import { bearingFromPath, boundsOfPath, smoothBearing } from '@/lib/camera';
-import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import {
+  bearingFromPath,
+  boundsOfPath,
+  followOffsetPx,
+  overviewPadding,
+  smoothBearing,
+  type ChromeInsets,
+} from '@/lib/camera';
+import { splitTrailing } from '@/lib/fence-3d';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
 import { useRegion } from '@/lib/region-context';
 import { buildFence, outerRings, type LatLng } from '@/lib/territory';
+
+
+/** No chrome over the map — the old behaviour, and what a caller that
+ *  passes no insets gets. Module-level so the identity is stable and the
+ *  mirroring effect below doesn't re-run every render. */
+const NO_CHROME: ChromeInsets = { top: 0, bottom: 0 };
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
 const MAPBOX_CSS_URL = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlPkg.version}/mapbox-gl.css`;
@@ -93,28 +106,54 @@ const FILL_OUTLINE_SRC = 'run-fill-outline';
 const TILES_SRC = 'run-tiles';
 const PULSE_STYLE_ID = 'track-pulse-style';
 
-// See fence-map.web.tsx's own copy of this helper for why the ring needs
-// closing — h3-js's boundary doesn't repeat its first point, GeoJSON
-// polygons require it to.
+/**
+ * The claimed cells as ONE dissolved shape, not one polygon per hexagon.
+ *
+ * cellsToMultiPolygon merges the set and returns its outline(s), holes and
+ * all — the same call enclosure.ts uses to find enclosed ground, so the two
+ * can never disagree about where the boundary is.
+ *
+ * Why it matters here: enclosure changed the scale of this. A run used to
+ * claim a few hundred cells along its path; a 10 km loop now claims ~25,900,
+ * and handing Mapbox 25,900 separate polygons every recompute is a lot of
+ * geometry for a shape that is visually one region. Dissolving also removes
+ * the internal edges, so the territory reads as one area rather than a
+ * quilt.
+ *
+ * The rings come back GeoJSON-wound ([lng, lat]) and already closed, which
+ * is why this no longer repeats the first point the way the per-hexagon
+ * version had to.
+ */
 function tileFeatureCollection(cells: string[]): FeatureCollection {
+  if (cells.length === 0) return { type: 'FeatureCollection', features: [] };
   return {
     type: 'FeatureCollection',
-    features: cells.map((h3): Feature => {
-      const boundary = cellToBoundary(h3, true) as [number, number][];
-      return {
+    features: cellsToMultiPolygon(cells, true).map(
+      (rings): Feature => ({
         type: 'Feature',
         properties: {},
-        geometry: { type: 'Polygon', coordinates: [[...boundary, boundary[0]]] },
-      };
-    }),
+        geometry: { type: 'Polygon', coordinates: rings },
+      }),
+    ),
   };
 }
 
 interface TrackMapProps {
-  points: LatLng[];
+  /** The recorded path. Timestamped, and that is load-bearing: the gap caps
+   *  that decide where this path must NOT be drawn as a continuous line are
+   *  a function of elapsed time as well as distance (see splitLegs). A plain
+   *  LatLng[] here is what let the route render straight across an
+   *  unrecorded background gap. */
+  points: TimedPoint[];
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
+  /** Pixels of app chrome drawn OVER the map (live stats block up top, the
+   *  floating tab bar at the bottom). The camera frames against the band
+   *  these leave visible rather than the whole container — see
+   *  camera.ts's visibleBand. Optional: omitted means "nothing covers the
+   *  map", which is the old behaviour. */
+  chromeInsets?: ChromeInsets;
   /** True once a session is live: drives the fly-in and the 3D framing. */
   active: boolean;
   /** This run's fence colour ('#rrggbb') — see FENCE_COLOR_SETS. */
@@ -188,6 +227,7 @@ export function TrackMap({
   points,
   running,
   here,
+  chromeInsets,
   active,
   fenceColor,
   tiles,
@@ -260,6 +300,14 @@ export function TrackMap({
   // a new session has no known direction yet, and the old one's heading is
   // meaningless for it.
   const bearingRef = useRef<number | null>(null);
+  // Mirrored into a ref for the same reason headRef/pointsRef are: the
+  // camera is applied from setTimeout and Mapbox event listeners, not only
+  // from a render, so it must read the current insets rather than the ones
+  // captured when applyCameraForMode was defined.
+  const chromeInsetsRef = useRef<ChromeInsets>(chromeInsets ?? NO_CHROME);
+  useEffect(() => {
+    chromeInsetsRef.current = chromeInsets ?? NO_CHROME;
+  }, [chromeInsets]);
   const { region } = useRegion();
 
   // Applies whichever camera cameraModeRef.current currently names — the
@@ -286,7 +334,15 @@ export function TrackMap({
           [bounds.west, bounds.south],
           [bounds.east, bounds.north],
         ],
-        { padding: OVERVIEW_FIT_PADDING_PX, bearing: 0, pitch: 0, duration: durationMs },
+        {
+          // Framed inside the band the chrome leaves visible — a uniform
+          // padding fits the top of the route into the space the timer is
+          // drawn over, and the bottom into the tab bar.
+          padding: overviewPadding(chromeInsetsRef.current, OVERVIEW_FIT_PADDING_PX),
+          bearing: 0,
+          pitch: 0,
+          duration: durationMs,
+        },
       );
       return;
     }
@@ -303,10 +359,10 @@ export function TrackMap({
       // shouldn't snap the camera to north, it should just hold whatever
       // it's already at until a real course is known.
       bearing: bearingRef.current ?? map.getBearing(),
-      // Pushes the runner toward the lower third of the viewport (Mapbox's
-      // `offset` is screen-space pixels, not world-space) — see
-      // FOLLOW_OFFSET_RATIO.
-      offset: [0, containerHeight * FOLLOW_OFFSET_RATIO],
+      // Pushes the runner toward the lower third of the VISIBLE band
+      // (Mapbox's `offset` is screen-space pixels, not world-space) — see
+      // followOffsetPx and FOLLOW_OFFSET_RATIO.
+      offset: [0, followOffsetPx(containerHeight, chromeInsetsRef.current, FOLLOW_OFFSET_RATIO)],
       duration: durationMs,
     });
   }, []);
@@ -783,7 +839,21 @@ export function TrackMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
-    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(tileFeatureCollection(tiles));
+    // ONE geometry drives both the flat fill and the raised wall: the tile
+    // footprint. Tiles are H3 cells — they tile the plane and arrive
+    // deduplicated (pathToTiles unions its direct and gap-filled sets), so
+    // no two features can overlap and the opacity is uniform no matter how
+    // many times a runner covers the same ground.
+    //
+    // The wall used to be a ribbon built along the path (buildWallPolygon).
+    // A ribbon is ONE ring, so a path that doubles back makes that ring
+    // self-intersect; Mapbox triangulates it and the overlapping triangles
+    // blend twice, so running a street three times drew it three times as
+    // dark. Reported 2026-09-07: the fence should mark total area, not how
+    // often it was crossed.
+    const footprint = tileFeatureCollection(tiles);
+    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(footprint);
+    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(footprint);
   }, [tiles]);
 
   // Feed coordinates in. setData on an existing source is the cheap path —
@@ -812,7 +882,20 @@ export function TrackMap({
           : smoothBearing(bearingRef.current, rawBearing, MAX_BEARING_STEP_DEG);
     }
 
-    const { settled, active: liveEdge } = splitTrailing(points, FENCE_LAG_M);
+    // Legs FIRST, then the trailing split — `points` is one flat array with
+    // no record of its own seams, so drawing straight from it joins the two
+    // sides of an unrecorded gap with a straight line. On a real iOS Safari
+    // run that showed as a chord from the start point to the runner's
+    // current position, and again as the wall ribbon's two edges (reported
+    // with screenshots 2026-09-07). splitLegs cuts exactly where
+    // pathToTiles already refuses to bridge, so the drawn route and the
+    // claimed tiles agree about what is a hole.
+    const legs = splitLegs(points);
+    // The live edge can only be in the newest leg, by definition.
+    const newestLeg = legs.length > 0 ? legs[legs.length - 1] : [];
+    // Only the live edge is wanted now — `settled` used to feed the wall
+    // ribbon, which the tile footprint replaced.
+    const { active: liveEdge } = splitTrailing(newestLeg, FENCE_LAG_M);
 
     const routeSource = map.getSource(ROUTE_SRC) as GeoJSONSource | undefined;
     routeSource?.setData({
@@ -824,11 +907,10 @@ export function TrackMap({
       },
     });
 
-    const wall = buildWallPolygon(settled, FENCE_WALL_WIDTH_M);
-    const wallSource = map.getSource(WALL_SRC) as GeoJSONSource | undefined;
-    wallSource?.setData(
-      wall ? { type: 'FeatureCollection', features: [wall] } : { type: 'FeatureCollection', features: [] },
-    );
+    // The wall is no longer built from this path — it is the tile footprint
+    // now, fed by the tiles effect above. `settled` is still computed
+    // because splitTrailing is what separates the live gradient edge from
+    // everything behind it.
 
     // Live territory fill — throttled to every LIVE_FILL_RECOMPUTE_POINTS
     // points or LIVE_FILL_RECOMPUTE_MS, whichever comes first, NOT on every
