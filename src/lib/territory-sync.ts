@@ -256,12 +256,24 @@ export async function claimTiles(
     let rivalRunners = 0;
     const rivalCells: string[] = [];
     if (skippedOlder > 0) {
-      const { data: existing } = await supabase
-        .from('territory_tiles')
-        .select('h3, owner_id')
-        .in('h3', cells);
-      if (existing) {
-        const owners = new Set<string>();
+      // CHUNKED. `.in()` puts every value in the URL, and an H3 id is ~16
+      // characters — 1000 cells is a 17 KB request line, well past what a
+      // proxy will accept, and a long run visits far more than that. The
+      // failure would not have been a clean error either: the read is
+      // best-effort, so a rejected request would have silently reported zero
+      // rival tiles on exactly the runs big enough to have them.
+      const CHUNK = 200;
+      const owners = new Set<string>();
+      let failed = false;
+      for (let i = 0; i < cells.length && !failed; i += CHUNK) {
+        const { data: existing, error } = await supabase
+          .from('territory_tiles')
+          .select('h3, owner_id')
+          .in('h3', cells.slice(i, i + CHUNK));
+        if (error || !existing) {
+          failed = true;
+          break;
+        }
         for (const tile of existing) {
           if (tile.owner_id !== session.user.id) {
             rivalTiles++;
@@ -269,8 +281,8 @@ export async function claimTiles(
             owners.add(tile.owner_id);
           }
         }
-        rivalRunners = owners.size;
       }
+      rivalRunners = owners.size;
       // A failed read here just under-reports rivalTiles/rivalRunners/
       // rivalCells as 0/[] — the claim itself already happened and is not
       // affected.
@@ -777,15 +789,34 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
     // runs.id — the only FK from this table to `runs`, so PostgREST can
     // resolve `runs(flagged)` unambiguously the same way fetchLeaderboard
     // resolves `profiles(display_name)`.
-    const { data, error } = await supabase
-      .from('territory_tiles')
-      // h3 is selected purely to filter on resolution — see the loop below.
-      // A leaderboard that mixed resolutions would rank a runner with
-      // unconverted res-11 tiles against runners counted in res-12 ones,
-      // which is not one ranking at all.
-      .select('h3, owner_id, region_id, runs(flagged)');
-
-    if (error || !data) return { ok: false, reason: 'network' };
+    // PAGED, and this is not defensive — it was WRONG. PostgREST caps a
+    // response at 1000 rows, and this query asked for every tile in the
+    // table with no range, so the board silently ranked a truncated sample.
+    // Measured 2026-09-08: 1000 rows returned against 1183 in the table, so
+    // 183 tiles were already missing from the ranking. Enclosure makes that
+    // catastrophic rather than merely wrong — a single 10 km loop claims
+    // ~26,000 tiles, of which the board would have seen 1000.
+    //
+    // A leaderboard that under-counts looks exactly like a leaderboard, which
+    // is why nobody noticed.
+    const data: { h3: string; owner_id: string | null; region_id: string | null; runs: unknown }[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data: page, error } = await supabase
+        .from('territory_tiles')
+        // h3 is selected purely to filter on resolution — see the loop below.
+        // A leaderboard that mixed resolutions would rank a runner with
+        // unconverted res-11 tiles against runners counted in res-12 ones,
+        // which is not one ranking at all.
+        .select('h3, owner_id, region_id, runs(flagged)')
+        // Ordered so paging is deterministic: without it Postgres may return
+        // rows in a different order per page and offset paging can skip one.
+        // h3 is the primary key, so it is unique and a total order.
+        .order('h3', { ascending: true })
+        .range(offset, offset + 999);
+      if (error || !page) return { ok: false, reason: 'network' };
+      data.push(...page);
+      if (page.length < 1000) break;
+    }
 
     const ownerIds = Array.from(new Set(data.map((row) => row.owner_id).filter((id): id is string => !!id)));
     let nameById = new Map<string, string | null>();

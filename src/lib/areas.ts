@@ -110,11 +110,23 @@ export async function createArea(
       .single();
     if (error || !data) return { ok: false, reason: 'network' };
 
-    if (unique.length > 0) {
+    // Chunked for the same reason claimTiles' rival lookup is: a run can
+    // cover hundreds of cells, and one oversized insert is a single failure
+    // point for the whole area.
+    const CHUNK = 500;
+    for (let i = 0; i < unique.length; i += CHUNK) {
       const { error: cellError } = await supabase
         .from('area_cells')
-        .insert(unique.map((h3) => ({ area_id: data.id, h3 })));
-      if (cellError) return { ok: false, reason: 'network' };
+        .insert(unique.slice(i, i + CHUNK).map((h3) => ({ area_id: data.id, h3 })));
+      if (cellError) {
+        // The area row is already in. There is no delete policy on `areas`
+        // (deliberate — an area's shape must not be editable by a losing
+        // incumbent), so it cannot be cleaned up from here. Report the
+        // failure honestly rather than returning ok with a half-built area:
+        // its cell_count would advertise ground it does not contain, and it
+        // could never be scored on.
+        return { ok: false, reason: 'network' };
+      }
     }
 
     return {
