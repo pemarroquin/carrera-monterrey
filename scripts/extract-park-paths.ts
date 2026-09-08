@@ -21,11 +21,19 @@
 //   npm run extract-park-paths                     # the Monterrey metro
 //   npm run extract-park-paths -- "Monterrey"      # named municipios
 //   npm run extract-park-paths -- --state          # every municipio in NL
-import { mkdirSync, writeFileSync } from 'node:fs';
+//   npm run extract-park-paths -- --resume         # skip ones already done
+//
+// USE --resume. Overpass will not serve a full metro run in one go: it
+// starts returning 429s and 504s partway through and eventually refuses
+// outright, and clipping doubled the requests per municipio (parks, paths,
+// boundary). A run that gets 2 of 7 is normal. --resume merges into the most
+// recent output and skips what is already there, so three patient runs
+// finish the metro where one impatient one cannot.
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compactCells, gridPathCells, latLngToCell } from 'h3-js';
+import { cellToLatLng, compactCells, gridPathCells, latLngToCell } from 'h3-js';
 
 import { DEFAULT_TILE_RES } from '@/lib/tiles';
 
@@ -77,6 +85,69 @@ async function overpass<T>(query: string, attempt = 0): Promise<T> {
   }
 }
 
+
+type Ring = [number, number][]; // [lng, lat]
+
+/**
+ * Stitches an OSM boundary relation's member ways into closed rings.
+ *
+ * Needed because Overpass returns an admin boundary as a bag of unordered
+ * way fragments, not a polygon. Members are joined end to end — each way's
+ * last point matches some other way's first or last — until the ring closes.
+ */
+function stitchRings(members: { geometry?: { lat: number; lon: number }[]; role?: string; type?: string }[]): Ring[] {
+  const segs = members
+    .filter((m) => m.type === 'way' && m.geometry && m.geometry.length > 1 && (m.role === 'outer' || !m.role))
+    .map((m) => m.geometry!.map((p): [number, number] => [p.lon, p.lat]));
+
+  const rings: Ring[] = [];
+  const pool = [...segs];
+  const key = (p: [number, number]) => `${p[0].toFixed(7)},${p[1].toFixed(7)}`;
+
+  while (pool.length > 0) {
+    let ring = pool.pop()!;
+    let joined = true;
+    while (joined && key(ring[0]) !== key(ring[ring.length - 1])) {
+      joined = false;
+      for (let i = 0; i < pool.length; i++) {
+        const seg = pool[i];
+        const end = key(ring[ring.length - 1]);
+        if (key(seg[0]) === end) {
+          ring = ring.concat(seg.slice(1));
+        } else if (key(seg[seg.length - 1]) === end) {
+          ring = ring.concat(seg.slice().reverse().slice(1));
+        } else {
+          continue;
+        }
+        pool.splice(i, 1);
+        joined = true;
+        break;
+      }
+    }
+    // An unclosed ring means fragments are missing from the relation — keep
+    // it anyway rather than dropping ground; ray casting treats it as closed.
+    if (ring.length > 3) rings.push(ring);
+  }
+  return rings;
+}
+
+/**
+ * Ray casting, written out rather than pulled from @turf: the only turf
+ * point-in-polygon in node_modules is a TRANSITIVE dependency, not something
+ * this project declares, and a build script should not quietly rely on one.
+ */
+function inRing(lng: number, lat: number, ring: Ring): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+const inMunicipio = (lng: number, lat: number, rings: Ring[]) => rings.some((r) => inRing(lng, lat, r));
+
 interface OsmWay {
   id: number;
   tags?: Record<string, string>;
@@ -127,6 +198,8 @@ interface MunicipioResult {
   namedParks: number;
   pathKm: number;
   cells: string[];
+  /** Cells dropped for falling outside the municipio's own boundary. */
+  clipped: number;
 }
 
 async function extract(municipio: string): Promise<MunicipioResult> {
@@ -156,12 +229,41 @@ way(area.pa)["highway"~"${RUNNABLE}"];
 out geom;`;
   const ways = await overpass<{ elements: OsmWay[] }>(pathQuery);
 
-  const cells = new Set<string>();
+  const raw = new Set<string>();
   let metres = 0;
   for (const w of ways.elements) {
     if (!w.geometry || w.geometry.length < 2) continue;
     for (let i = 1; i < w.geometry.length; i++) metres += segmentM(w.geometry[i - 1], w.geometry[i]);
-    for (const c of wayCells(w.geometry, DEFAULT_TILE_RES)) cells.add(c);
+    for (const c of wayCells(w.geometry, DEFAULT_TILE_RES)) raw.add(c);
+  }
+
+  await new Promise((r) => setTimeout(r, 5_000));
+
+  // CLIP TO THE BOUNDARY. Overpass's `way(area.m)` returns ways that
+  // INTERSECT an area, not ones strictly inside it, so a park straddling a
+  // municipio line is returned for every municipio it touches. Measured
+  // before this clip: 8 866 of 47 345 cells (18.7%) were claimed by more
+  // than one municipio — Monterrey and San Pedro shared 3 711, which is the
+  // Río Santa Catarina linear park running along the boundary between them.
+  //
+  // Left unfixed that is not a rounding error, it is a broken metric: every
+  // denominator is inflated, and running one linear park would credit a
+  // runner in three municipios at once, so "% of San Pedro's park paths"
+  // would not be a real quantity at all.
+  const boundary = await overpass<{ elements: { members?: OsmWay[] }[] }>(`[out:json][timeout:300];
+${scope}
+relation(area.st)["admin_level"="6"]["name"="${municipio}"];
+out geom;`);
+  const rings = stitchRings(boundary.elements[0]?.members ?? []);
+
+  const cells = rings.length > 0
+    ? [...raw].filter((h3) => {
+        const [lat, lng] = cellToLatLng(h3);
+        return inMunicipio(lng, lat, rings);
+      })
+    : [...raw];
+  if (rings.length === 0) {
+    console.log('    NO BOUNDARY GEOMETRY — cells left unclipped, may overlap neighbours');
   }
 
   return {
@@ -169,7 +271,8 @@ out geom;`;
     parks: parks.elements.length,
     namedParks,
     pathKm: metres / 1000,
-    cells: [...cells].sort(),
+    cells: cells.sort(),
+    clipped: raw.size - cells.length,
   };
 }
 
@@ -190,8 +293,29 @@ out tags;`,
     console.log(`  ${targets.length} municipios\n`);
   }
 
+  // --resume: carry forward whatever the last run managed to get.
+  const outDirEarly = path.join(ROOT, 'supabase/generated');
   const results: MunicipioResult[] = [];
+  if (process.argv.includes('--resume')) {
+    mkdirSync(outDirEarly, { recursive: true });
+    const previous = readdirSync(outDirEarly).filter((f) => f.endsWith('_park_paths.json')).sort().pop();
+    if (previous) {
+      const prev = JSON.parse(readFileSync(path.join(outDirEarly, previous), 'utf8')) as {
+        municipios: Record<string, { parks: number; namedParks: number; pathKm: number; cells: string[] }>;
+      };
+      for (const [name, m] of Object.entries(prev.municipios)) {
+        results.push({ municipio: name, ...m, clipped: 0 });
+      }
+      console.log(`resuming from ${previous}: ${results.length} municipio(s) already done\n`);
+    }
+  }
+  const done = new Set(results.map((r) => r.municipio));
+
   for (const [i, m] of targets.entries()) {
+    if (done.has(m)) {
+      console.log(`[${i + 1}/${targets.length}] ${m} — already extracted, skipping`);
+      continue;
+    }
     console.log(`[${i + 1}/${targets.length}] ${m}`);
     try {
       const r = await extract(m);
@@ -199,7 +323,7 @@ out tags;`,
       const compacted = compactCells(r.cells);
       console.log(
         `    ${r.parks} parks (${r.namedParks} named), ${r.pathKm.toFixed(1)} km of path, ` +
-          `${r.cells.length} cells (${compacted.length} compacted)`,
+          `${r.cells.length} cells (${compacted.length} compacted, ${r.clipped} clipped to boundary)`,
       );
     } catch (e) {
       // Loudly, and skipped — a municipio recorded with zero cells would show
@@ -210,7 +334,7 @@ out tags;`,
     if (i < targets.length - 1) await new Promise((r) => setTimeout(r, 10_000));
   }
 
-  const outDir = path.join(ROOT, 'supabase/generated');
+  const outDir = outDirEarly;
   mkdirSync(outDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 
@@ -241,7 +365,10 @@ out tags;`,
   );
 
   const totalCells = results.reduce((n, r) => n + r.cells.length, 0);
-  console.log(`\n${results.length}/${targets.length} municipios extracted, ${totalCells} cells total`);
+  console.log(`\n${results.length}/${targets.length} municipios in the output, ${totalCells} cells total`);
+  if (results.length < targets.length) {
+    console.log('  INCOMPLETE — rerun with --resume to pick up the rest once Overpass cools down.');
+  }
   console.log(`  ${path.relative(ROOT, seedPath)}  (${(JSON.stringify(seed).length / 1024).toFixed(0)} KB)`);
   console.log(`  ${path.relative(ROOT, sqlPath)}`);
 }
