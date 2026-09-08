@@ -74,7 +74,8 @@
     "geometry-audit": "node scripts/geometry-audit.mjs",
     "audit-territories": "node scripts/audit-territories.mjs",
     "convert-tile-res": "vite-node --config vitest.config.ts scripts/convert-tile-res.ts",
-    "verify-claims": "vite-node --config vitest.config.ts scripts/verify-claims.ts"
+    "verify-claims": "vite-node --config vitest.config.ts scripts/verify-claims.ts",
+    "extract-park-paths": "vite-node --config vitest.config.ts scripts/extract-park-paths.ts"
   },
   "private": true
 }
