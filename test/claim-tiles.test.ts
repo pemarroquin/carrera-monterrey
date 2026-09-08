@@ -135,6 +135,19 @@ describe('claimTiles', () => {
     return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'tooOld' }));
   });
 
+  it('reports "rejected" when the claim is for ground the run never recorded', () => {
+    // The targeted forgery the tile-coverage migration explicitly left open:
+    // a plausible tile COUNT for the distance, but cells from a
+    // neighbourhood the runner never went near. An honest client cannot
+    // produce this, so it groups with the other two rejections rather than
+    // getting runner-facing copy of its own.
+    nextRpc = {
+      data: null,
+      error: { message: 'CLAIM_OFF_PATH: run run-1 claims 214 tiles outside the ground it recorded' },
+    };
+    return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'rejected' }));
+  });
+
   it('reports "network" for any other claim failure', () => {
     nextRpc = { data: null, error: { message: 'connection refused' } };
     return claimTiles('run-1', ['a'], 'mty').then((o) => expect(o).toEqual({ ok: false, reason: 'network' }));

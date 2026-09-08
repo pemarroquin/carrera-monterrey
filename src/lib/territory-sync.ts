@@ -169,6 +169,11 @@ const FORGERY_GUARD_MARKER = 'TILE_FORGERY_GUARD';
 const CLAIM_TOO_OLD_MARKER = 'CLAIM_TOO_OLD';
 /** Marker for a run claiming more tiles than its distance could enclose. */
 const CLAIM_IMPLAUSIBLE_MARKER = 'CLAIM_IMPLAUSIBLE';
+/** Marker for a run claiming ground outside the path it actually recorded
+ *  (20260908030000). Grouped with the other two as 'rejected' rather than
+ *  given its own runner-facing reason: all three mean "the server did not
+ *  believe this claim", and an honest client cannot produce any of them. */
+const CLAIM_OFF_PATH_MARKER = 'CLAIM_OFF_PATH';
 
 export async function claimTiles(
   runId: string,
@@ -223,7 +228,11 @@ export async function claimTiles(
       // rather than SQLSTATE: plpgsql's plain `raise exception` uses the
       // generic P0001 for all of these, which cannot tell them apart.
       const message = claimError.message ?? '';
-      if (message.includes(FORGERY_GUARD_MARKER) || message.includes(CLAIM_IMPLAUSIBLE_MARKER)) {
+      if (
+        message.includes(FORGERY_GUARD_MARKER) ||
+        message.includes(CLAIM_IMPLAUSIBLE_MARKER) ||
+        message.includes(CLAIM_OFF_PATH_MARKER)
+      ) {
         return { ok: false, reason: 'rejected' };
       }
       if (message.includes(CLAIM_TOO_OLD_MARKER)) return { ok: false, reason: 'tooOld' };
