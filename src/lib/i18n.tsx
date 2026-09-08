@@ -215,14 +215,6 @@ const translations = {
       areaPromptSkip: 'Ahora no',
       areaPromptCreated: 'Zona creada. Vuelve mañana para defenderla.',
       areaPromptFailed: 'No pudimos crear la zona. Puedes intentarlo otra vez.',
-      // Overlap nudge. Lo importante: unirse no cuesta nada — cualquiera que
-      // pase por una zona ya compite en ella. Por eso el mensaje no ofrece
-      // "unirte", informa que YA estás compitiendo ahí.
-      areaOverlapTitle: 'Esto ya es %{name}',
-      areaOverlapBody:
-        'Tu recorrido cubre casi toda esa zona, así que ya estás compitiendo ahí — no tienes que hacer nada. Crear otra encima divide la competencia entre las dos.',
-      areaOverlapKeep: 'Ya estoy compitiendo',
-      areaOverlapAnyway: 'Crear otra de todos modos',
       // Stat-bar label replacing `area` (still defined above, unused by the
       // session-end screen now — see index.tsx) — brief §6 step 5.
       tiles: 'Casillas',
@@ -742,11 +734,6 @@ const translations = {
       areaPromptSkip: 'Not now',
       areaPromptCreated: 'Area created. Come back tomorrow to defend it.',
       areaPromptFailed: "We couldn't create the area. You can try again.",
-      areaOverlapTitle: 'This is already %{name}',
-      areaOverlapBody:
-        "Your route covers most of that area, so you're already competing there — there's nothing to do. Making another one on top splits the competition between them.",
-      areaOverlapKeep: "I'm already competing",
-      areaOverlapAnyway: 'Create another anyway',
       tiles: 'Tiles',
       tilesHeld: 'You now hold %{count} tiles in %{region}.',
       tilesUnavailable: "We couldn't confirm your tiles this time — your run is still saved.",
