@@ -17,6 +17,7 @@ import {
   Text,
   View,
   useColorScheme,
+  type LayoutChangeEvent,
 } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -100,6 +101,27 @@ export default function TrackScreen() {
   const here = inSession ? (tracker.lastFix ?? location.coords) : location.coords;
 
   const [saveState, setSaveState] = useState<SaveState>('idle');
+  // How far down the screen the live stats block reaches — MEASURED, not
+  // assumed, because its height depends on the device's safe area, the
+  // font scale, and which of the GPS/background warnings are showing. The
+  // map fills the whole screen behind this overlay, so without it the
+  // camera frames the run against a container a third of which the runner
+  // cannot see. See camera.ts's visibleBand.
+  const [statsChromeH, setStatsChromeH] = useState(0);
+  const onStatsLayout = useCallback((e: LayoutChangeEvent) => {
+    const { y, height } = e.nativeEvent.layout;
+    // y is relative to the SafeAreaView's inner view, which already begins
+    // below the notch — so y + height is the chrome's own bottom edge in
+    // that space, and the safe-area inset above it is added by the layout
+    // itself rather than needing to be read separately.
+    setStatsChromeH((prev) => {
+      const next = Math.round(y + height);
+      // Only grow, and only on a real change: the block's height flickers
+      // as warnings mount and unmount, and re-fitting the camera on every
+      // one of those would make the map twitch mid-run.
+      return next > prev ? next : prev;
+    });
+  }, []);
   const [savedRunId, setSavedRunId] = useState<string | null>(null);
   // What this run took from other runners. UNCHANGED (brief §4: don't
   // delete) but no longer RENDERED — the tile-claim summary below replaced
@@ -784,6 +806,9 @@ export default function TrackScreen() {
         zoomOutLabel={t('track.zoomOut')}
         recenterLabel={t('track.recenter')}
         overviewLabel={t('track.overview')}
+        // What covers the map: the measured stats block above, the floating
+        // pill tab bar below. The camera frames the run inside what is left.
+        chromeInsets={{ top: statsChromeH, bottom: BottomTabInset }}
       />
 
       {/* The map is always dark (MAP_ALWAYS_DARK), so a plain white scrim
@@ -859,7 +884,10 @@ export default function TrackScreen() {
       <SafeAreaView style={styles.overlay} edges={['top']}>
         <View style={[styles.overlayInner, inSession && styles.overlayInnerSession]}>
           {inSession ? (
-            <Animated.View entering={FadeInDown.duration(400)} style={styles.liveStats}>
+            <Animated.View
+              entering={FadeInDown.duration(400)}
+              onLayout={onStatsLayout}
+              style={styles.liveStats}>
               <Text style={[styles.liveTime, { color: '#FFFFFF' }]}>
                 {formatDuration(tracker.elapsedS)}
               </Text>

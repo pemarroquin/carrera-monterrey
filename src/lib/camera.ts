@@ -140,3 +140,80 @@ export function boundsOfPath(points: LatLng[]): Bounds | null {
   }
   return { west, south, east, north };
 }
+
+/**
+ * The app chrome drawn OVER the map, in pixels. The map fills the whole
+ * screen behind it, so the region a runner can actually see is the container
+ * minus these.
+ *
+ * `top` is the live stats block (timer, distance, and the GPS/background
+ * warnings under it) plus the safe-area inset it sits below; `bottom` is the
+ * floating pill tab bar. They are wildly asymmetric — the stats block is
+ * several times the tab bar's height — which is exactly why treating the
+ * container as the visible area puts the camera's idea of "centre" well
+ * above the eye's.
+ */
+export interface ChromeInsets {
+  top: number;
+  bottom: number;
+}
+
+/** The band of the map the chrome does NOT cover: its height, and the
+ *  distance from the container's own centre to the band's centre (positive
+ *  = the band's centre is BELOW the container's). */
+export function visibleBand(containerH: number, insets: ChromeInsets): { height: number; centreShiftPx: number } {
+  // Degenerate chrome (taller than the container, or a container not laid
+  // out yet) would otherwise produce a negative band and invert every
+  // calculation below — fall back to the whole container, which is exactly
+  // the old behaviour.
+  const height = containerH - insets.top - insets.bottom;
+  if (!(containerH > 0) || height <= 0) return { height: containerH, centreShiftPx: 0 };
+  return { height, centreShiftPx: insets.top + height / 2 - containerH / 2 };
+}
+
+/**
+ * Screen-space y offset for the follow camera (Mapbox GL's `offset`), so the
+ * runner sits `ratio` of the way from the VISIBLE band's centre toward its
+ * bottom edge — "more map ahead of you than behind", the turn-by-turn
+ * framing, measured against what the runner can actually see.
+ *
+ * The old form was `containerH * FOLLOW_OFFSET_RATIO` against the raw
+ * container. Two things were wrong with it, and only the second is about
+ * chrome:
+ *
+ *  1. An offset of 0.28 from the CENTRE puts the runner at 78% of the
+ *     screen — the lower quarter, not the "lower third" its own constant
+ *     documented. Reported 2026-09-07 as the route sitting lower than it
+ *     should.
+ *  2. Measured against the container, the bottom of that range is behind
+ *     the tab bar, so the trail immediately behind the runner is occluded
+ *     by chrome rather than visible.
+ *
+ * Returns 0 for a container that has not been laid out yet, which leaves
+ * the camera centred rather than throwing the target off-screen.
+ */
+export function followOffsetPx(containerH: number, insets: ChromeInsets, ratio: number): number {
+  if (!(containerH > 0)) return 0;
+  const { height, centreShiftPx } = visibleBand(containerH, insets);
+  // `ratio` keeps its original meaning — the fraction of a height pushed
+  // below a centre — so only the height it is measured against changed.
+  return centreShiftPx + height * ratio;
+}
+
+/**
+ * Padding for the overview fit, so the whole run is framed inside the
+ * VISIBLE band instead of the full container — otherwise the top of the
+ * route is fitted into the space the timer is drawn over, and the bottom
+ * into the tab bar.
+ */
+export function overviewPadding(
+  insets: ChromeInsets,
+  basePx: number,
+): { top: number; bottom: number; left: number; right: number } {
+  return {
+    top: insets.top + basePx,
+    bottom: insets.bottom + basePx,
+    left: basePx,
+    right: basePx,
+  };
+}

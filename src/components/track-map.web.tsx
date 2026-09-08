@@ -77,13 +77,26 @@ import {
   TILE_FILL_OPACITY,
   ZOOM_STEP,
 } from '@/constants/map';
-import { bearingFromPath, boundsOfPath, smoothBearing } from '@/lib/camera';
+import {
+  bearingFromPath,
+  boundsOfPath,
+  followOffsetPx,
+  overviewPadding,
+  smoothBearing,
+  type ChromeInsets,
+} from '@/lib/camera';
 import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
 import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
 import { useRegion } from '@/lib/region-context';
 import { buildFence, outerRings, type LatLng } from '@/lib/territory';
+
+
+/** No chrome over the map — the old behaviour, and what a caller that
+ *  passes no insets gets. Module-level so the identity is stable and the
+ *  mirroring effect below doesn't re-run every render. */
+const NO_CHROME: ChromeInsets = { top: 0, bottom: 0 };
 
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
 const MAPBOX_CSS_URL = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlPkg.version}/mapbox-gl.css`;
@@ -121,6 +134,12 @@ interface TrackMapProps {
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
+  /** Pixels of app chrome drawn OVER the map (live stats block up top, the
+   *  floating tab bar at the bottom). The camera frames against the band
+   *  these leave visible rather than the whole container — see
+   *  camera.ts's visibleBand. Optional: omitted means "nothing covers the
+   *  map", which is the old behaviour. */
+  chromeInsets?: ChromeInsets;
   /** True once a session is live: drives the fly-in and the 3D framing. */
   active: boolean;
   /** This run's fence colour ('#rrggbb') — see FENCE_COLOR_SETS. */
@@ -194,6 +213,7 @@ export function TrackMap({
   points,
   running,
   here,
+  chromeInsets,
   active,
   fenceColor,
   tiles,
@@ -266,6 +286,14 @@ export function TrackMap({
   // a new session has no known direction yet, and the old one's heading is
   // meaningless for it.
   const bearingRef = useRef<number | null>(null);
+  // Mirrored into a ref for the same reason headRef/pointsRef are: the
+  // camera is applied from setTimeout and Mapbox event listeners, not only
+  // from a render, so it must read the current insets rather than the ones
+  // captured when applyCameraForMode was defined.
+  const chromeInsetsRef = useRef<ChromeInsets>(chromeInsets ?? NO_CHROME);
+  useEffect(() => {
+    chromeInsetsRef.current = chromeInsets ?? NO_CHROME;
+  }, [chromeInsets]);
   const { region } = useRegion();
 
   // Applies whichever camera cameraModeRef.current currently names — the
@@ -292,7 +320,15 @@ export function TrackMap({
           [bounds.west, bounds.south],
           [bounds.east, bounds.north],
         ],
-        { padding: OVERVIEW_FIT_PADDING_PX, bearing: 0, pitch: 0, duration: durationMs },
+        {
+          // Framed inside the band the chrome leaves visible — a uniform
+          // padding fits the top of the route into the space the timer is
+          // drawn over, and the bottom into the tab bar.
+          padding: overviewPadding(chromeInsetsRef.current, OVERVIEW_FIT_PADDING_PX),
+          bearing: 0,
+          pitch: 0,
+          duration: durationMs,
+        },
       );
       return;
     }
@@ -309,10 +345,10 @@ export function TrackMap({
       // shouldn't snap the camera to north, it should just hold whatever
       // it's already at until a real course is known.
       bearing: bearingRef.current ?? map.getBearing(),
-      // Pushes the runner toward the lower third of the viewport (Mapbox's
-      // `offset` is screen-space pixels, not world-space) — see
-      // FOLLOW_OFFSET_RATIO.
-      offset: [0, containerHeight * FOLLOW_OFFSET_RATIO],
+      // Pushes the runner toward the lower third of the VISIBLE band
+      // (Mapbox's `offset` is screen-space pixels, not world-space) — see
+      // followOffsetPx and FOLLOW_OFFSET_RATIO.
+      offset: [0, followOffsetPx(containerHeight, chromeInsetsRef.current, FOLLOW_OFFSET_RATIO)],
       duration: durationMs,
     });
   }, []);

@@ -391,14 +391,27 @@ export const MAX_BEARING_STEP_DEG = 45;
 
 /**
  * Web only (Mapbox GL's `offset` camera option, in pixels, is screen-space
- * and zoom-independent — see track-map.web.tsx). Fraction of the map
- * container's height the follow camera's target is pushed DOWN-screen, so
- * the runner sits toward the lower third of the viewport and more map shows
- * ahead of them than behind — the Apple/Google Maps turn-by-turn framing
- * Pedro asked to match. 0.28 reads as "lower third" without crowding the
- * camera-controls cluster that already sits bottom-right.
+ * and zoom-independent — see track-map.web.tsx). Fraction of the VISIBLE
+ * map band's height the follow camera's target is pushed DOWN-screen, so
+ * the runner sits toward the lower third of what they can actually see and
+ * more map shows ahead of them than behind — the Apple/Google Maps
+ * turn-by-turn framing Pedro asked to match.
+ *
+ * Changed 2026-09-07 (0.28 of the CONTAINER -> 0.167 of the visible band)
+ * after the route was reported sitting lower on screen than it should.
+ * Both halves of that were wrong:
+ *
+ *  - 0.28 below the centre is 78% of the way down — the lower QUARTER, not
+ *    the "lower third" this comment claimed. 1/6 of a height below its
+ *    centre is exactly two thirds of the way down it.
+ *  - Measured against the raw container it ignored the chrome drawn over
+ *    the map: the live stats block up top and the floating tab bar at the
+ *    bottom. See camera.ts's followOffsetPx and visibleBand.
+ *
+ * This is the knob for that framing: raise it to sit lower with more road
+ * ahead, drop it to 0 to sit dead-centre in the visible band.
  */
-export const FOLLOW_OFFSET_RATIO = 0.28;
+export const FOLLOW_OFFSET_RATIO = 0.167;
 
 /**
  * Native only (track-map.tsx). react-native-maps has no pixel-offset camera

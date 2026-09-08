@@ -53,7 +53,14 @@ import {
   withAlpha,
   ZOOM_STEP,
 } from '@/constants/map';
-import { bearingFromPath, boundsOfPath, destinationPoint, smoothBearing } from '@/lib/camera';
+import {
+  bearingFromPath,
+  boundsOfPath,
+  destinationPoint,
+  overviewPadding,
+  smoothBearing,
+  type ChromeInsets,
+} from '@/lib/camera';
 import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
 import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { gradientStrokeColors, ringToCoords } from '@/lib/fence-draw';
@@ -70,6 +77,11 @@ interface TrackMapProps {
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
+  /** Pixels of app chrome drawn OVER the map (live stats block up top, the
+   *  floating tab bar at the bottom). The camera frames against the band
+   *  these leave visible rather than the whole container — see camera.ts's
+   *  visibleBand. Optional: omitted means "nothing covers the map". */
+  chromeInsets?: ChromeInsets;
   /** True once a session is live: drives the fly-in and the tilted framing. */
   active: boolean;
   /** This run's fence colour ('#rrggbb') — see FENCE_COLOR_SETS. */
@@ -119,21 +131,22 @@ function cameraFor(center: LatLng, zoom: number, pitch: number, heading = 0) {
   };
 }
 
-// Padding for MapView.fitToCoordinates in overview mode. EdgePadding wants
-// all four sides, unlike web's single-number OVERVIEW_FIT_PADDING_PX for
-// Mapbox GL's fitBounds — bottom gets extra so the fitted route doesn't
-// duck under the camera-controls cluster / bottom tab bar sitting there.
-const OVERVIEW_EDGE_PADDING = {
-  top: OVERVIEW_FIT_PADDING_PX,
-  right: OVERVIEW_FIT_PADDING_PX,
-  bottom: OVERVIEW_FIT_PADDING_PX + BottomTabInset + 96,
-  left: OVERVIEW_FIT_PADDING_PX,
-};
+/** No chrome over the map — what a caller that passes no insets gets. */
+const NO_CHROME: ChromeInsets = { top: 0, bottom: 0 };
+
+// Overview padding now comes from camera.ts's overviewPadding, shared with
+// web, rather than the hand-built EdgePadding this replaces. That version
+// allowed for the bottom chrome (BottomTabInset plus a further hard-coded
+// 96) but nothing for the TOP — where the live stats block is drawn over
+// the map — so it framed the run above the visible band's centre, the
+// mirror image of the web bug reported 2026-09-07. Both platforms now
+// measure against the same band.
 
 export function TrackMap({
   points,
   running,
   here,
+  chromeInsets,
   active,
   fenceColor,
   tiles,
@@ -168,6 +181,12 @@ export function TrackMap({
   // (camera.ts) has enough separation to derive one. Reset at the start of
   // each session, same as web: a new session has no known direction yet.
   const bearingRef = useRef<number | null>(null);
+  // Mirrored into a ref: the camera is applied from timers and callbacks,
+  // not only from a render, so it must read the current insets.
+  const chromeInsetsRef = useRef<ChromeInsets>(chromeInsets ?? NO_CHROME);
+  useEffect(() => {
+    chromeInsetsRef.current = chromeInsets ?? NO_CHROME;
+  }, [chromeInsets]);
 
   // Only ever a fallback for the *initial* camera, and only while no real
   // fix exists — a map of your metro beats an empty rectangle, and it needs
@@ -202,7 +221,10 @@ export function TrackMap({
           { latitude: bounds.south, longitude: bounds.west },
           { latitude: bounds.north, longitude: bounds.east },
         ],
-        { edgePadding: OVERVIEW_EDGE_PADDING, animated: true },
+        {
+          edgePadding: overviewPadding(chromeInsetsRef.current, OVERVIEW_FIT_PADDING_PX),
+          animated: true,
+        },
       );
       // fitToCoordinates has no bearing/pitch/duration parameters of its
       // own (a react-native-maps limitation, not a choice here) — flatten
