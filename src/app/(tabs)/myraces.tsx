@@ -30,6 +30,7 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { RaceCard } from '@/components/race-card';
+import { MunicipioProgressList } from '@/components/municipio-progress';
 import { TerritoriesMap, type TerritoryFeature } from '@/components/territories-map';
 import { Icon } from '@/components/ui/icon';
 import { BottomTabInset, Colors, Spacing } from '@/constants/theme';
@@ -58,7 +59,7 @@ interface RaceSection {
   data: Race[];
 }
 
-type SavedView = 'races' | 'fences';
+type SavedView = 'races' | 'fences' | 'progress';
 
 /** What the detail card is currently showing — the id plus enough to route
  *  the right actions (kind) without re-deriving it from the two lists on
@@ -204,7 +205,7 @@ export default function MyRacesScreen() {
       <Text style={[styles.title, { color: c.text }]}>{t('myraces.title')}</Text>
 
       <View style={styles.segmentRow}>
-        {(['races', 'fences'] as const).map((key) => {
+        {(['races', 'fences', 'progress'] as const).map((key) => {
           const selected = view === key;
           return (
             <Pressable
@@ -218,14 +219,28 @@ export default function MyRacesScreen() {
               ]}>
               <Text
                 style={[styles.segmentLabel, { color: selected ? '#ffffff' : c.textSecondary }]}>
-                {t(key === 'races' ? 'myraces.tabRaces' : 'myraces.tabFences')}
+                {t(
+                  key === 'races'
+                    ? 'myraces.tabRaces'
+                    : key === 'fences'
+                      ? 'myraces.tabFences'
+                      : 'myraces.tabProgress',
+                )}
               </Text>
             </Pressable>
           );
         })}
       </View>
 
-      {view === 'races' ? (
+      {view === 'progress' ? (
+        /* Park-path progress per municipio. A THIRD segment on this tab
+           rather than a new one: the standing rule here is to look for
+           reusable space before adding nav surface, and this is the same
+           question the other two answer — what have I done, and where. */
+        <ScrollView contentContainerStyle={styles.progressScroll}>
+          <MunicipioProgressList c={c} />
+        </ScrollView>
+      ) : view === 'races' ? (
         <SectionList
           sections={sections}
           keyExtractor={(r) => r.id}
@@ -614,6 +629,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
   },
+  progressScroll: { paddingBottom: BottomTabInset },
   segmentRow: {
     flexDirection: 'row',
     gap: Spacing.one,

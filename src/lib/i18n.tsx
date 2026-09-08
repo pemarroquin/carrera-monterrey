@@ -371,6 +371,16 @@ const translations = {
       remove: 'Quitar de mis carreras',
       tabRaces: 'Carreras',
       tabFences: 'Territorios',
+      tabProgress: 'Progreso',
+      // La unidad es lo que costó decidir: medido sobre datos reales, una
+      // corrida de 5.7 km en San Pedro es 0.262% del ÁREA del municipio,
+      // 0.63% de toda su red de calles y 5.5% de sus senderos de parques.
+      // Solo la última es una barra que se mueve.
+      progressExplainer:
+        'Senderos de parques que has recorrido en cada municipio. Cuenta el terreno que pisaste, no el que rodeaste.',
+      progressDetail: '%{covered} de %{total} casillas · %{km} km de sendero en %{parks} parques',
+      progressEmpty: 'Todavía no hay datos de parques para tu estado.',
+      progressFailed: 'No pudimos cargar tu progreso. Revisa tu conexión.',
       fencesEmpty:
         'Aún no has conquistado territorio.\nInicia una sesión en Correr para trazar tu primer cercado.',
       fencesError: 'No pudimos cargar tus territorios. Revisa tu conexión.',
@@ -860,6 +870,12 @@ const translations = {
       remove: 'Remove from my races',
       tabRaces: 'Races',
       tabFences: 'Territories',
+      tabProgress: 'Progress',
+      progressExplainer:
+        "Park paths you've covered in each municipio. Counts ground you ran over, not ground you surrounded.",
+      progressDetail: '%{covered} of %{total} tiles · %{km} km of path across %{parks} parks',
+      progressEmpty: 'No park data loaded for your state yet.',
+      progressFailed: "We couldn't load your progress. Check your connection.",
       fencesEmpty:
         "No territory captured yet.\nStart a session in Run to draw your first fence.",
       fencesError: "We couldn't load your territories. Check your connection.",
