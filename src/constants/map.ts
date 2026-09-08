@@ -206,6 +206,32 @@ export const LIVE_FILL_OUTLINE_WIDTH = 2.5;
  */
 export const FENCE_SHIMMER_STEP_MS = 2200;
 
+/**
+ * Above this many cells, the run summary stops drawing one polygon per
+ * hexagon and dissolves the set into a single shape instead.
+ *
+ * The summary draws hexagons individually on purpose, and that is worth
+ * defending rather than treating as an oversight: on that screen the runner
+ * is STOPPED, looking at one run, and the tiles ARE the score. Seeing 597
+ * distinct hexagons says "you claimed 597 tiles" in a way a smooth blob
+ * cannot. The live map is the opposite case — moving, wanting one clear
+ * shape, with the count already in the stat bar — which is why it dissolves
+ * unconditionally.
+ *
+ * So this is not a reversal of that decision, it is the ceiling on it. The
+ * owner's four stored runs come to 164-597 cells and Mapbox is comfortable
+ * into the low thousands, so nothing real crosses this today. What it
+ * prevents is a cliff: an unusually large loop silently turning the summary
+ * into a slideshow with no explanation.
+ *
+ * 2000 is chosen to sit well above every observed run and well below where
+ * per-feature rendering starts to hurt. Past it the texture is lost, but at
+ * the zoom needed to fit that many cells on screen the individual hexagons
+ * were no longer resolvable anyway — so the fallback gives up something the
+ * runner could not see.
+ */
+export const TILE_DISSOLVE_THRESHOLD = 2000;
+
 
 /**
  * The route/territory gradient — a full 12-colour HUE WHEEL, in order, each

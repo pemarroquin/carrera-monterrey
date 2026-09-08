@@ -31,7 +31,7 @@
 // after an empty addSource(), same as the live route — it was rendering pure
 // black (Mapbox's default line-color) despite line-gradient being set and
 // lineMetrics being true (P3 §7c).
-import { cellToBoundary } from 'h3-js';
+import { cellToBoundary, cellsToMultiPolygon } from 'h3-js';
 import type { GeoJSONSource, Map as MapboxMap } from 'mapbox-gl';
 import mapboxGlPkg from 'mapbox-gl/package.json';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
@@ -54,6 +54,7 @@ import {
   ROUTE_GRADIENT,
   ROUTE_LINE_COLOR,
   ROUTE_LINE_WIDTH,
+  TILE_DISSOLVE_THRESHOLD,
   TILE_FILL_OPACITY,
   TILE_RIVAL_COLOR,
   TILE_RIVAL_FILL_OPACITY,
@@ -85,6 +86,24 @@ const RIVAL_TILES_SRC = 'fence-rival-tiles';
  *  native-maps Polygon (fence-map.tsx), but GeoJSON polygon rings must be
  *  explicitly closed, so this closes each ring before handing it to Mapbox. */
 function tileFeatureCollection(cells: string[]): FeatureCollection {
+  // Past the threshold, fall back to the dissolved form the live map always
+  // uses — see TILE_DISSOLVE_THRESHOLD for why individual hexagons are the
+  // right default HERE and why there is a ceiling on them anyway. The rings
+  // come back already closed and GeoJSON-wound from this call, unlike
+  // cellToBoundary below.
+  if (cells.length > TILE_DISSOLVE_THRESHOLD) {
+    return {
+      type: 'FeatureCollection',
+      features: cellsToMultiPolygon(cells, true).map(
+        (rings): Feature => ({
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'Polygon', coordinates: rings },
+        }),
+      ),
+    };
+  }
+
   return {
     type: 'FeatureCollection',
     features: cells.map((h3): Feature => {

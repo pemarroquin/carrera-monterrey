@@ -6,7 +6,15 @@
 // unbounded bridge is the enclosure model's auto-close bug wearing
 // different clothes — a background-gap jump used to be bridged exactly
 // like a normal throttle gap, silently claiming ground never run over.
-import { getResolution, gridDistance, gridPathCells, latLngToCell } from 'h3-js';
+import {
+  cellsToMultiPolygon,
+  getResolution,
+  gridDisk,
+  gridDistance,
+  gridPathCells,
+  latLngToCell,
+  polygonToCells,
+} from 'h3-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -18,6 +26,7 @@ import {
   tileResLikePattern,
   type TilePoint,
 } from '@/lib/tiles';
+import { TILE_DISSOLVE_THRESHOLD } from '@/constants/map';
 
 // Wraps gridPathCells so ONE test (below) can force it to throw without
 // touching every other test's real behaviour. vi.spyOn on a plain
@@ -378,5 +387,32 @@ describe('tile resolution filtering', () => {
   it('defaults to the resolution the app actually claims at', () => {
     expect(tileResLikePattern()).toBe(`_${DEFAULT_TILE_RES.toString(16)}%`);
     expect(DEFAULT_TILE_RES).toBe(12);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The summary map's dissolve ceiling
+// ---------------------------------------------------------------------------
+// Not a tiles.ts function, but the threshold it guards is a tiles concept and
+// the property worth pinning is arithmetic: dissolving must never LOSE
+// ground. A fallback that quietly drew less than the runner owns would be
+// indistinguishable from a claim that failed.
+describe('TILE_DISSOLVE_THRESHOLD', () => {
+  it('sits above every run this app has actually recorded', () => {
+    // The owner's four stored runs come to 164-597 cells (measured
+    // 2026-09-08). The ceiling exists for the unusual case, not the normal
+    // one — if this ever needs lowering, the reason must be measured, not
+    // assumed.
+    expect(TILE_DISSOLVE_THRESHOLD).toBeGreaterThan(597);
+  });
+
+  it('dissolving a cell set covers exactly the same cells', () => {
+    // The safety property. Fill each dissolved ring back to cells and the
+    // set must be unchanged — no ground gained, none lost.
+    const centre = latLngToCell(25.6866, -100.3161, DEFAULT_TILE_RES);
+    const cells = gridDisk(centre, 4);
+    const dissolved = cellsToMultiPolygon(cells, true);
+    const refilled = new Set(dissolved.flatMap((rings) => polygonToCells(rings, DEFAULT_TILE_RES, true)));
+    expect(refilled).toEqual(new Set(cells));
   });
 });

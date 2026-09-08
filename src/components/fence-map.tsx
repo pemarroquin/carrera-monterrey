@@ -19,7 +19,7 @@
 // Past fences render muted, each in ITS run's colour (fenceColorForRun of
 // its stored started_at — the same derivation every other screen uses), so
 // territories stay tellable apart without a legend.
-import { cellToBoundary } from 'h3-js';
+import { cellToBoundary, cellsToMultiPolygon } from 'h3-js';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -34,6 +34,7 @@ import {
   GOOGLE_DARK_MAP_STYLE,
   ROUTE_LINE_COLOR,
   ROUTE_LINE_WIDTH,
+  TILE_DISSOLVE_THRESHOLD,
   TILE_FILL_OPACITY,
   TILE_RIVAL_COLOR,
   TILE_RIVAL_FILL_OPACITY,
@@ -119,12 +120,25 @@ export function FenceMap({
   // pairs by default (h3-js v4), which is already react-native-maps'
   // {latitude,longitude} order once mapped — no GeoJSON [lng,lat] flip
   // needed here, unlike the web/GL version.
+  // Individual hexagons up to TILE_DISSOLVE_THRESHOLD, then the dissolved
+  // form — the summary is where the tiles ARE the score and worth seeing
+  // one by one, but a large loop must not turn it into a slideshow. Native
+  // matters more here than web: this mounts a <Polygon> COMPONENT per
+  // feature rather than handing a layer one collection.
+  //
+  // Holes are dropped when dissolving: react-native-maps takes them as a
+  // separate prop, and enclosed ground is claimed ground here anyway.
   const tilePolys = useMemo(
     () =>
-      tiles.map((h3) => ({
-        h3,
-        coords: cellToBoundary(h3).map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
-      })),
+      tiles.length > TILE_DISSOLVE_THRESHOLD
+        ? cellsToMultiPolygon(tiles).map((rings, i) => ({
+            h3: `region-${i}`,
+            coords: rings[0].map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+          }))
+        : tiles.map((h3) => ({
+            h3,
+            coords: cellToBoundary(h3).map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+          })),
     [tiles],
   );
   const rivalTilePolys = useMemo(
