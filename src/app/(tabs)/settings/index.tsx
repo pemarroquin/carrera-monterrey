@@ -75,6 +75,18 @@ export default function SettingsIndexScreen() {
               hint={t('settings.navAccountHint')}
               c={c}
             />
+            {/* The permanent personal record, deliberately here rather than
+                on the live map: under conquest that map shows what you hold
+                RIGHT NOW and can fall while you sleep, so "everywhere I have
+                been" needed a surface nobody can take from you. */}
+            <NavRow
+              href="/settings/history"
+              ios="map"
+              android="map"
+              label={t('settings.historyTitle')}
+              hint={t('settings.historyNavHint')}
+              c={c}
+            />
             <GroupBreak c={c} />
           </>
         )}

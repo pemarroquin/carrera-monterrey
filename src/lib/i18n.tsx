@@ -461,6 +461,18 @@ const translations = {
       zoneOffHint:
         'Sin zona privada, el inicio y el final exactos de tus sesiones se suben y cualquier persona que use la app puede verlos. Ponla donde vives.',
       zoneFailed: 'No pudimos guardar tu zona. Revisa el permiso de ubicación e inténtalo otra vez.',
+      // Settings › Dónde has corrido. El registro personal permanente — el
+      // contrapeso a un mapa que bajo conquista muestra solo lo que tienes
+      // AHORA. Aquí no te lo puede quitar nadie.
+      historyTitle: 'Dónde has corrido',
+      historyNavHint: 'Todo el terreno que has pisado. Nadie te lo quita.',
+      historyHint: {
+        one: 'Has pisado 1 casilla. Esto no cambia aunque alguien te gane el territorio.',
+        other:
+          'Has pisado %{count} casillas. Esto no cambia aunque alguien te gane el territorio.',
+      } as PluralForm,
+      historyEmpty: 'Todavía no has guardado ninguna sesión.',
+      historyFailed: 'No pudimos cargar tu historial. Revisa tu conexión.',
       displayName: 'Nombre en la tabla',
       displayNamePlaceholder: 'Anónimo',
       displayNameHint:
@@ -925,6 +937,14 @@ const translations = {
       zoneOffHint:
         'Without a privacy zone, the exact start and end of your sessions are uploaded and visible to anyone using the app. Set it where you live.',
       zoneFailed: "We couldn\u2019t save your zone. Check location permission and try again.",
+      historyTitle: "Where you've run",
+      historyNavHint: "Every piece of ground you've covered. Nobody can take it.",
+      historyHint: {
+        one: "You've covered 1 tile. This doesn't change when someone takes territory from you.",
+        other: "You've covered %{count} tiles. This doesn't change when someone takes territory from you.",
+      } as PluralForm,
+      historyEmpty: "You haven't saved a session yet.",
+      historyFailed: "We couldn't load your history. Check your connection.",
       displayName: 'Leaderboard name',
       displayNamePlaceholder: 'Anonymous',
       displayNameHint:

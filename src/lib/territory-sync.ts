@@ -892,3 +892,53 @@ export async function updateDisplayName(name: string): Promise<ProfileOutcome> {
     return { ok: true, displayName: value };
   });
 }
+
+export type VisitedOutcome =
+  | { ok: true; cells: string[] }
+  | { ok: false; reason: 'disabled' | 'auth' | 'network' };
+
+/**
+ * Every cell this runner has ever physically covered.
+ *
+ * Reads `tile_visits`, and that choice is the whole feature. `tile_visits`
+ * is an append-only log with no update or delete policy, so CONQUEST never
+ * touches it: ground taken off you by a later run stays in your history
+ * forever, because you did run there. `territory_tiles` answers "what do I
+ * hold"; this answers "where have I been", and the two must not be the same
+ * surface — that confusion is why the personal record moved off the live map
+ * in the first place.
+ *
+ * Enclosed ground is deliberately absent. It is owned but was never run
+ * over, and this is a record of places the runner has actually been.
+ *
+ * Paged rather than a single request: PostgREST caps a response at 1000 rows
+ * by default, so a runner past that would silently see a truncated history
+ * — a wrong answer that looks like a complete one.
+ */
+export async function fetchMyVisitedCells(): Promise<VisitedOutcome> {
+  return withSession<{ cells: string[] }>(async (session) => {
+    const PAGE = 1000;
+    const seen = new Set<string>();
+
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from('tile_visits')
+        .select('h3')
+        .eq('user_id', session.user.id)
+        .order('h3', { ascending: true })
+        .range(offset, offset + PAGE - 1);
+
+      // A partial history is worse than none: it would draw a map missing
+      // places the runner remembers going, with nothing to say why.
+      if (error) return { ok: false, reason: 'network' };
+      if (!data || data.length === 0) break;
+
+      // The same cell appears once per run that crossed it — the log records
+      // visits, not ground.
+      for (const row of data) seen.add(row.h3);
+      if (data.length < PAGE) break;
+    }
+
+    return { ok: true, cells: [...seen] };
+  });
+}

@@ -42,6 +42,7 @@ export default function SettingsLayout() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="profile" options={{ title: t('settings.sectionProfile') }} />
       <Stack.Screen name="account" options={{ title: t('settings.accountTitle') }} />
+      <Stack.Screen name="history" options={{ title: t('settings.historyTitle') }} />
       <Stack.Screen name="preferences" options={{ title: t('settings.sectionPreferences') }} />
       <Stack.Screen name="location" options={{ title: t('settings.sectionLocation') }} />
       <Stack.Screen name="privacy" options={{ title: t('privacy.title') }} />
