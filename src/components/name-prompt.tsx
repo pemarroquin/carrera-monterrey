@@ -49,6 +49,12 @@ type PromptState =
   | 'ask' // showing the form
   | 'saving'
   | 'failed' // the write failed — form stays up so the runner can retry or skip
+  // Nicknames are unique (see nickname.ts + the display-name unique index).
+  // Both of these are the runner's to fix by typing something else, so they
+  // are NOT 'failed' — that copy says "try again or leave it for later",
+  // which is wrong advice when retrying the same name can only fail again.
+  | 'taken'
+  | 'reserved'
   | 'done'; // name saved — dismissing
 
 export function NamePrompt() {
@@ -122,6 +128,10 @@ export function NamePrompt() {
     if (outcome.ok) {
       markAsked();
       setState('done');
+    } else if (outcome.reason === 'taken') {
+      setState('taken');
+    } else if (outcome.reason === 'reserved') {
+      setState('reserved');
     } else {
       // Honest failure — never close as if it worked.
       setState('failed');
@@ -141,7 +151,13 @@ export function NamePrompt() {
 
         <TextInput
           value={name}
-          onChangeText={setName}
+          onChangeText={(next) => {
+            setName(next);
+            // The name that was rejected is the one being replaced — drop
+            // the message rather than leaving "already taken" pinned under
+            // a nickname nobody has tried yet.
+            if (state === 'taken' || state === 'reserved' || state === 'failed') setState('ask');
+          }}
           onSubmitEditing={() => {
             if (canSave) void save();
           }}
@@ -162,8 +178,16 @@ export function NamePrompt() {
           {trimmedLen}/{DISPLAY_NAME_MAX}
         </Text>
 
-        {state === 'failed' && (
-          <Text style={[styles.error, { color: c.accent }]}>{t('settings.namePromptFailed')}</Text>
+        {(state === 'failed' || state === 'taken' || state === 'reserved') && (
+          <Text style={[styles.error, { color: c.accent }]}>
+            {t(
+              state === 'taken'
+                ? 'settings.displayNameTaken'
+                : state === 'reserved'
+                  ? 'settings.displayNameReserved'
+                  : 'settings.namePromptFailed',
+            )}
+          </Text>
         )}
 
         <View style={styles.actions}>

@@ -40,6 +40,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import type { Feature, FeatureCollection, MultiPolygon, Polygon as GeoPolygon } from 'geojson';
 
 import { Icon } from '@/components/ui/icon';
+import { BottomTabInset, Spacing } from '@/constants/theme';
 import {
   EMISSIVE_STRENGTH_FULL,
   fenceColorForRun,
@@ -514,10 +515,15 @@ const styles = StyleSheet.create({
   wrap: { overflow: 'hidden' },
   mapControls: {
     position: 'absolute',
-    right: 16,
-    bottom: 16,
+    right: Spacing.three,
+    // Clears the floating pill tab bar, exactly as track-map's own
+    // cameraControls does. A raw `bottom: 16` put the LOWEST button in this
+    // column — zoom out — entirely inside the tab bar's 96px band, so on the
+    // run-summary screen (this component's only caller, a tab screen) it read
+    // as simply missing. Reported 2026-09-07.
+    bottom: BottomTabInset + Spacing.three,
     alignItems: 'center',
-    gap: 10,
+    gap: Spacing.two,
   },
   mapButton: {
     width: 52,

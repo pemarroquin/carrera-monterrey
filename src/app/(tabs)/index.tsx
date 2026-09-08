@@ -1138,6 +1138,13 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     padding: Spacing.three,
     paddingBottom: BottomTabInset + Spacing.three,
+    // Clears FenceMap's own control column (52px wide, inset Spacing.three
+    // from the right) so these notices wrap beside the zoom/recenter buttons
+    // instead of running underneath them. The comment above used to claim
+    // this stack sat "above" those controls; it never did — the notices
+    // start at BottomTabInset + Spacing.three and stack UPWARD, straight
+    // through the column. Fixed alongside the missing zoom-out button.
+    paddingRight: Spacing.three + 52 + Spacing.two,
   },
   onDarkNotice: { color: 'rgba(255,255,255,0.85)' },
 
