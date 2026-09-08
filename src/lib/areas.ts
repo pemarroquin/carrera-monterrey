@@ -252,3 +252,81 @@ export async function deleteArea(areaId: string): Promise<DeleteAreaOutcome> {
     return { ok: true, deleted: true };
   });
 }
+
+/**
+ * How much of a PROPOSED area must already be covered by an existing one
+ * before the app suggests competing there instead.
+ *
+ * Measured against the proposal, not symmetrically, and the asymmetry is the
+ * point. "Most of the ground you just marked already belongs to an area" is
+ * the question worth asking. The reverse — a small existing area sitting
+ * inside a much larger proposal — is not a duplicate: someone marking a
+ * whole neighbourhood loop that happens to contain a park is describing a
+ * different thing, and should be allowed to.
+ *
+ * 0.6 rather than something near 1.0 because two people tracing the same
+ * park never produce the same cells: they enter at different gates, run the
+ * path in different directions, and their GPS wanders differently. Demanding
+ * near-identity would catch almost none of the duplicates this exists to
+ * prevent.
+ */
+export const AREA_OVERLAP_SUGGEST = 0.6;
+
+export interface AreaOverlap {
+  areaId: string;
+  name: string;
+  /** Cells shared with the proposed area. */
+  shared: number;
+  /** Total cells in the existing area. */
+  areaCellCount: number;
+  /** Share of the PROPOSED area already covered by this one, 0..1. */
+  coverage: number;
+}
+
+/**
+ * The best existing match for a proposed cell set, or null if nothing
+ * substantially overlaps.
+ *
+ * Pure, so the threshold is testable without a database — the SQL returns
+ * raw counts precisely so this judgement lives here.
+ */
+export function bestOverlap(rows: AreaOverlap[], threshold: number = AREA_OVERLAP_SUGGEST): AreaOverlap | null {
+  const candidates = rows.filter((r) => r.coverage >= threshold);
+  if (candidates.length === 0) return null;
+  // Highest coverage wins; ties go to the SMALLER area, which is the more
+  // specific description of the same ground — "Parque El Capitán" rather
+  // than "the whole west side".
+  return candidates.reduce((best, r) =>
+    r.coverage > best.coverage || (r.coverage === best.coverage && r.areaCellCount < best.areaCellCount)
+      ? r
+      : best,
+  );
+}
+
+/**
+ * Existing areas overlapping a proposed cell set.
+ *
+ * Note what "joining" costs the runner: nothing. Anyone whose run touches an
+ * area is ranked on it automatically, so if they accept the suggestion there
+ * is no action to take — they are already competing there. The prompt exists
+ * only to stop a duplicate being created.
+ *
+ * A failure here returns no overlaps rather than an error. Being unable to
+ * check must not block someone naming their loop; the worst case is one
+ * duplicate area, which is the situation this feature improves on, not a
+ * regression from it.
+ */
+export async function findOverlappingAreas(cells: string[]): Promise<AreaOverlap[]> {
+  if (cells.length === 0) return [];
+  const { data, error } = await supabase.rpc('area_overlaps', { p_cells: cells });
+  if (error || !data) return [];
+
+  const rows = data as { area_id: string; name: string; shared: number; area_cell_count: number }[];
+  return rows.map((r) => ({
+    areaId: r.area_id,
+    name: r.name,
+    shared: r.shared,
+    areaCellCount: r.area_cell_count,
+    coverage: cells.length > 0 ? r.shared / cells.length : 0,
+  }));
+}

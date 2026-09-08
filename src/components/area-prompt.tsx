@@ -18,14 +18,28 @@ import Animated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
 import { GlassSurface } from '@/components/ui/glass-surface';
 import { GlassRadii } from '@/constants/glass';
 import { Colors, Spacing } from '@/constants/theme';
-import { AREA_NAME_MAX, createArea, isValidAreaName } from '@/lib/areas';
+import {
+  AREA_NAME_MAX,
+  bestOverlap,
+  createArea,
+  findOverlappingAreas,
+  isValidAreaName,
+  type AreaOverlap,
+} from '@/lib/areas';
 import { useI18n } from '@/lib/i18n';
 
 // 'skipped' is NOT 'done'. They were one state, and the result was that
 // tapping "Not now" rendered "Area created. Come back tomorrow to defend
 // it." — a success message for something that never happened, which is the
 // one failure mode this codebase refuses (see the silent-success rule).
-type Step = 'ask' | 'saving' | 'failed' | 'done' | 'skipped';
+type Step =
+  | 'ask'
+  | 'checking' // looking for an existing area covering the same ground
+  | 'overlap' // found one — offering to leave it alone
+  | 'saving'
+  | 'failed'
+  | 'done'
+  | 'skipped';
 
 export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: string | null }) {
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
@@ -34,15 +48,31 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
 
   const [step, setStep] = useState<Step>('ask');
   const [name, setName] = useState('');
+  const [overlap, setOverlap] = useState<AreaOverlap | null>(null);
 
-  const save = useCallback(async () => {
-    if (!isValidAreaName(name)) return; // the button is disabled too; belt and braces
+  const create = useCallback(async () => {
     setStep('saving');
     const outcome = await createArea(name, cells, regionId);
     // Honest failure — never close as if it worked. The name is still in the
     // field, so a retry costs nothing.
     setStep(outcome.ok ? 'done' : 'failed');
   }, [name, cells, regionId]);
+
+  const save = useCallback(async () => {
+    if (!isValidAreaName(name)) return; // the button is disabled too; belt and braces
+
+    // Check for an area already covering this ground before creating a
+    // second one on top of it. A failed check returns no overlaps, so being
+    // unable to look never blocks someone naming their loop.
+    setStep('checking');
+    const match = bestOverlap(await findOverlappingAreas(cells));
+    if (match) {
+      setOverlap(match);
+      setStep('overlap');
+      return;
+    }
+    await create();
+  }, [name, cells, create]);
 
   // Nothing was created, so say nothing.
   if (step === 'skipped') return null;
@@ -55,7 +85,38 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
     );
   }
 
-  const canSave = isValidAreaName(name) && step !== 'saving';
+  if (step === 'overlap' && overlap) {
+    return (
+      <Animated.View entering={FadeInDown.duration(320)}>
+        <GlassSurface scheme={scheme} radius={GlassRadii.card} contentStyle={styles.card}>
+          <Text style={[styles.title, { color: c.text }]}>
+            {t('track.areaOverlapTitle', { name: overlap.name })}
+          </Text>
+          {/* The point worth making plainly: joining costs NOTHING. Anyone
+              whose run touches an area is ranked on it automatically, so
+              accepting this suggestion means doing nothing at all. The
+              button says so rather than offering a "join" that would imply
+              an action the runner has not already taken. */}
+          <Text style={[styles.body, { color: c.textSecondary }]}>{t('track.areaOverlapBody')}</Text>
+          <View style={styles.actions}>
+            <Pressable onPress={() => void create()} accessibilityRole="button" hitSlop={10}>
+              <Text style={[styles.skip, { color: c.textSecondary }]}>{t('track.areaOverlapAnyway')}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setStep('skipped')}
+              accessibilityRole="button"
+              hitSlop={10}
+              style={[styles.action, { backgroundColor: c.accent }]}>
+              <Text style={styles.actionLabel}>{t('track.areaOverlapKeep')}</Text>
+            </Pressable>
+          </View>
+        </GlassSurface>
+      </Animated.View>
+    );
+  }
+
+  const busy = step === 'saving' || step === 'checking';
+  const canSave = isValidAreaName(name) && !busy;
 
   return (
     <Animated.View entering={FadeInDown.duration(320)} exiting={FadeOutUp.duration(200)}>
@@ -77,7 +138,7 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
           onSubmitEditing={() => {
             if (canSave) void save();
           }}
-          editable={step !== 'saving'}
+          editable={!busy}
           maxLength={AREA_NAME_MAX}
           placeholder={t('track.areaPromptPlaceholder')}
           placeholderTextColor={c.textSecondary}
@@ -92,7 +153,7 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
         )}
 
         <View style={styles.actions}>
-          <Pressable onPress={() => setStep('skipped')} disabled={step === 'saving'} accessibilityRole="button" hitSlop={10}>
+          <Pressable onPress={() => setStep('skipped')} disabled={busy} accessibilityRole="button" hitSlop={10}>
             <Text style={[styles.skip, { color: c.textSecondary }]}>{t('track.areaPromptSkip')}</Text>
           </Pressable>
           <Pressable
@@ -101,9 +162,9 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
             accessibilityRole="button"
             hitSlop={10}
             style={[styles.action, { backgroundColor: c.accent, opacity: canSave ? 1 : 0.4 }]}>
-            {step === 'saving' && <ActivityIndicator color="#ffffff" style={styles.spinner} />}
+            {busy && <ActivityIndicator color="#ffffff" style={styles.spinner} />}
             <Text style={styles.actionLabel}>
-              {step === 'saving' ? t('track.areaPromptSaving') : t('track.areaPromptSave')}
+              {busy ? t('track.areaPromptSaving') : t('track.areaPromptSave')}
             </Text>
           </Pressable>
         </View>

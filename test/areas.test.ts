@@ -18,8 +18,15 @@ vi.mock('@/lib/supabase', () => ({
   TERRITORY_ENABLED: true,
 }));
 
-const { AREA_DELETE_WINDOW_MS, AREA_NAME_MAX, canDeleteArea, isValidAreaName, rankLegends } =
-  await import('@/lib/areas');
+const {
+  AREA_DELETE_WINDOW_MS,
+  AREA_NAME_MAX,
+  AREA_OVERLAP_SUGGEST,
+  bestOverlap,
+  canDeleteArea,
+  isValidAreaName,
+  rankLegends,
+} = await import('@/lib/areas');
 
 // Declared here rather than imported as a type: `await import` gives values,
 // and a second type-only import of the same module would defeat the mock.
@@ -120,5 +127,61 @@ describe('canDeleteArea', () => {
     // surfaces as a silent no-op, since RLS makes a policy-less DELETE
     // return success having deleted nothing.
     expect(AREA_DELETE_WINDOW_MS).toBe(HOUR);
+  });
+});
+
+describe('bestOverlap', () => {
+  const row = (name: string, coverage: number, areaCellCount: number) => ({
+    areaId: name,
+    name,
+    shared: Math.round(coverage * 100),
+    areaCellCount,
+    coverage,
+  });
+
+  it('suggests nothing when the ground is new', () => {
+    expect(bestOverlap([])).toBeNull();
+  });
+
+  it('suggests nothing for a glancing overlap', () => {
+    // A loop that clips the corner of an existing area is not the same
+    // place. Suggesting otherwise would push people to stop marking out
+    // genuinely new ground.
+    expect(bestOverlap([row('El Capitán', 0.2, 500)])).toBeNull();
+  });
+
+  it('suggests the area when most of the proposal is already covered', () => {
+    expect(bestOverlap([row('El Capitán', 0.85, 500)])?.name).toBe('El Capitán');
+  });
+
+  it('measures against the PROPOSAL, so a big new loop containing a small area is not a duplicate', () => {
+    // Someone marking a neighbourhood loop that happens to contain a park is
+    // describing a different thing and must be allowed to. Here a 40-cell
+    // park sits inside a 600-cell proposal: the park is fully covered, but
+    // it is only 7% of what is being marked.
+    expect(bestOverlap([row('Small park', 40 / 600, 40)])).toBeNull();
+  });
+
+  it('breaks ties toward the SMALLER area — the more specific name for the same ground', () => {
+    const chosen = bestOverlap([row('The whole west side', 0.9, 4000), row('El Capitán', 0.9, 500)]);
+    expect(chosen?.name).toBe('El Capitán');
+  });
+
+  it('picks the strongest match when several qualify', () => {
+    const chosen = bestOverlap([row('Nearby loop', 0.65, 500), row('El Capitán', 0.95, 800)]);
+    expect(chosen?.name).toBe('El Capitán');
+  });
+
+  it('honours a caller-supplied threshold', () => {
+    expect(bestOverlap([row('El Capitán', 0.5, 500)], 0.4)?.name).toBe('El Capitán');
+    expect(bestOverlap([row('El Capitán', 0.5, 500)], 0.9)).toBeNull();
+  });
+
+  it('uses a threshold loose enough for two people tracing the same park', () => {
+    // They enter at different gates, run the path in different directions,
+    // and their GPS wanders differently — identical cell sets never happen.
+    // A threshold near 1.0 would catch almost no real duplicates.
+    expect(AREA_OVERLAP_SUGGEST).toBeLessThanOrEqual(0.7);
+    expect(AREA_OVERLAP_SUGGEST).toBeGreaterThan(0.4);
   });
 });
