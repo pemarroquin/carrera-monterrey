@@ -36,8 +36,6 @@ import { BottomTabInset, Spacing } from '@/constants/theme';
 import {
   type CameraMode,
   FENCE_LAG_M,
-  FENCE_RIBBON_WIDTH_M,
-  FENCE_WALL_OPACITY,
   FOLLOW_LOOKAHEAD_M,
   GOOGLE_DARK_MAP_STYLE,
   MAP_DEFAULT_ZOOM,
@@ -61,9 +59,9 @@ import {
   smoothBearing,
   type ChromeInsets,
 } from '@/lib/camera';
-import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import { splitTrailing } from '@/lib/fence-3d';
 import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
-import { gradientStrokeColors, ringToCoords } from '@/lib/fence-draw';
+import { gradientStrokeColors } from '@/lib/fence-draw';
 import { useRegion } from '@/lib/region-context';
 import type { LatLng } from '@/lib/territory';
 
@@ -357,22 +355,20 @@ export function TrackMap({
   // 2026-09-07; the same flat-array assumption is here). splitLegs cuts
   // exactly where pathToTiles already refuses to bridge.
   const legs = useMemo(() => splitLegs(points), [points]);
-  const { settled, active: liveEdge } = useMemo(
+  const { active: liveEdge } = useMemo(
     // The live edge can only be in the newest leg, by definition.
     () => splitTrailing(legs.length > 0 ? legs[legs.length - 1] : [], FENCE_LAG_M),
     [legs],
   );
-  // One ribbon per leg: every completed leg in full, plus the settled part
-  // of the newest. A leg under 2 points yields no polygon and is dropped
-  // rather than drawn as a degenerate sliver.
-  const ribbons = useMemo(
-    () =>
-      [...legs.slice(0, -1), settled]
-        .map((leg) => buildWallPolygon(leg, FENCE_RIBBON_WIDTH_M))
-        .filter((wall): wall is NonNullable<typeof wall> => wall !== null)
-        .map((wall) => ringToCoords(wall.geometry.coordinates[0])),
-    [legs, settled],
-  );
+  // No ribbon any more. It was a flat filled polygon tracing the path, and
+  // react-native-maps has no fill-extrusion, so it duplicated exactly what
+  // the tile polygons below already draw — while ALSO stacking its own
+  // opacity wherever the path doubled back (one ring that self-intersects
+  // triangulates into overlapping triangles). Reported 2026-09-07: the
+  // fence should mark total area, not how many times it was crossed. The
+  // tiles are H3 cells, deduplicated and non-overlapping by construction,
+  // so they cannot stack. Web keeps a wall because it has a real extrusion
+  // — and that wall is now the same tile footprint.
   const edgeCoords = useMemo(
     () => liveEdge.map((p) => ({ latitude: p.lat, longitude: p.lng })),
     [liveEdge],
@@ -417,18 +413,7 @@ export function TrackMap({
             strokeWidth={0}
           />
         ))}
-        {ribbons.map((coords, i) => (
-          <Polygon
-            // Index key: legs are positional and only ever appended to or
-            // extended at the tail, so an index is stable for everything
-            // before the newest leg and the newest one re-renders anyway.
-            key={`ribbon-${i}`}
-            coordinates={coords}
-            fillColor={withAlpha(fenceColor, FENCE_WALL_OPACITY)}
-            strokeColor={withAlpha(fenceColor, 0.9)}
-            strokeWidth={1}
-          />
-        ))}
+
         {edgeCoords.length >= 2 && (
           <Polyline
             coordinates={edgeCoords}

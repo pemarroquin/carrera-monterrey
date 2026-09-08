@@ -50,7 +50,6 @@ import {
   FENCE_WALL_COLOR,
   FENCE_WALL_HEIGHT_M,
   FENCE_WALL_OPACITY,
-  FENCE_WALL_WIDTH_M,
   FOLLOW_OFFSET_RATIO,
   LIVE_FILL_OPACITY_HIGH,
   LIVE_FILL_OPACITY_LOW,
@@ -85,7 +84,7 @@ import {
   smoothBearing,
   type ChromeInsets,
 } from '@/lib/camera';
-import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import { splitTrailing } from '@/lib/fence-3d';
 import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
@@ -825,7 +824,21 @@ export function TrackMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
-    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(tileFeatureCollection(tiles));
+    // ONE geometry drives both the flat fill and the raised wall: the tile
+    // footprint. Tiles are H3 cells — they tile the plane and arrive
+    // deduplicated (pathToTiles unions its direct and gap-filled sets), so
+    // no two features can overlap and the opacity is uniform no matter how
+    // many times a runner covers the same ground.
+    //
+    // The wall used to be a ribbon built along the path (buildWallPolygon).
+    // A ribbon is ONE ring, so a path that doubles back makes that ring
+    // self-intersect; Mapbox triangulates it and the overlapping triangles
+    // blend twice, so running a street three times drew it three times as
+    // dark. Reported 2026-09-07: the fence should mark total area, not how
+    // often it was crossed.
+    const footprint = tileFeatureCollection(tiles);
+    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(footprint);
+    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(footprint);
   }, [tiles]);
 
   // Feed coordinates in. setData on an existing source is the cheap path —
@@ -865,7 +878,9 @@ export function TrackMap({
     const legs = splitLegs(points);
     // The live edge can only be in the newest leg, by definition.
     const newestLeg = legs.length > 0 ? legs[legs.length - 1] : [];
-    const { settled, active: liveEdge } = splitTrailing(newestLeg, FENCE_LAG_M);
+    // Only the live edge is wanted now — `settled` used to feed the wall
+    // ribbon, which the tile footprint replaced.
+    const { active: liveEdge } = splitTrailing(newestLeg, FENCE_LAG_M);
 
     const routeSource = map.getSource(ROUTE_SRC) as GeoJSONSource | undefined;
     routeSource?.setData({
@@ -877,16 +892,10 @@ export function TrackMap({
       },
     });
 
-    // One ribbon per leg: every completed leg in full, plus the settled part
-    // of the newest one. A single-point leg yields no polygon
-    // (buildWallPolygon returns null under 2 points) and is dropped here
-    // rather than drawn as a degenerate sliver.
-    const wallInputs = [...legs.slice(0, -1), settled];
-    const walls = wallInputs
-      .map((leg) => buildWallPolygon(leg, FENCE_WALL_WIDTH_M))
-      .filter((w): w is NonNullable<typeof w> => w !== null);
-    const wallSource = map.getSource(WALL_SRC) as GeoJSONSource | undefined;
-    wallSource?.setData({ type: 'FeatureCollection', features: walls });
+    // The wall is no longer built from this path — it is the tile footprint
+    // now, fed by the tiles effect above. `settled` is still computed
+    // because splitTrailing is what separates the live gradient edge from
+    // everything behind it.
 
     // Live territory fill — throttled to every LIVE_FILL_RECOMPUTE_POINTS
     // points or LIVE_FILL_RECOMPUTE_MS, whichever comes first, NOT on every
