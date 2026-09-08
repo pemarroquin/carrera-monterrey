@@ -11,9 +11,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_TILE_RES,
+  isCurrentTileRes,
   MAX_BRIDGE_DISTANCE_M,
   MAX_BRIDGE_SPEED_MS,
   pathToTiles,
+  tileResLikePattern,
   type TilePoint,
 } from '@/lib/tiles';
 
@@ -86,7 +88,7 @@ describe('pathToTiles', () => {
   });
 
   it('two fixes within the same tile need no gap-fill', () => {
-    // A handful of metres — well inside one ~25m-edge res-11 cell.
+    // A handful of metres — inside one ~10.8m-edge res-12 cell.
     const result = pathToTiles([pointEast(0, 0), pointEast(5, 2000)]);
     expect(result.gapFilledCount).toBe(0);
     expect(result.bridgesSkippedSpeed).toBe(0);
@@ -95,8 +97,10 @@ describe('pathToTiles', () => {
 
   it('bridges a realistic 55m gap at a plausible pace — no hole between consecutive fixes', () => {
     // 55m: empirically confirmed (see the git history of this test file) as
-    // reliably needing an intermediate cell — res-11 cell CENTRES are only
-    // ~25-45m apart, so smaller gaps can land in plain neighbours.
+    // reliably needing an intermediate cell. It cleared that bar at res 11,
+    // whose cell centres sit ~25-45m apart; at res 12 (centres ~10-19m
+    // apart) it clears it by even more, so the assertion only got safer
+    // when the resolution changed on 2026-09-07.
     const path = pathAtPace(2, 55, JOG_MS);
     const result = pathToTiles(path);
 
@@ -318,5 +322,61 @@ describe('the bridge distance cap (straight-line-guess fix)', () => {
     // cap must sit comfortably above that range, not press right against
     // it, or routine GPS spacing would start tripping the cap by accident.
     expect(MAX_BRIDGE_DISTANCE_M).toBeGreaterThan(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resolution filtering
+// ---------------------------------------------------------------------------
+// The app claims at DEFAULT_TILE_RES, but the table can hold rows from a
+// PREVIOUS resolution: it changed 11 -> 12 on 2026-09-07 and the conversion
+// of stored tiles is a migration applied by hand, so there is a real window
+// where both exist. Counting both inflates every total by up to 8x.
+describe('tile resolution filtering', () => {
+  const MONTERREY: [number, number] = [25.6866, -100.3161];
+
+  it('accepts a cell at the current resolution and rejects one from another', () => {
+    expect(isCurrentTileRes(latLngToCell(...MONTERREY, DEFAULT_TILE_RES))).toBe(true);
+    expect(isCurrentTileRes(latLngToCell(...MONTERREY, DEFAULT_TILE_RES - 1))).toBe(false);
+    expect(isCurrentTileRes(latLngToCell(...MONTERREY, DEFAULT_TILE_RES + 1))).toBe(false);
+  });
+
+  // THE INVARIANT THIS WHOLE MECHANISM RESTS ON. An H3 index's second
+  // character is its resolution nibble ("8b…" = 11, "8c…" = 12), which is
+  // what lets fetchMyTileTotal filter by resolution in SQL — it is a COUNT
+  // query and never sees the cell strings — and what lets the conversion
+  // migration select old rows with `h3 like '_b%'` without the h3-pg
+  // extension installed.
+  //
+  // If h3-js ever changed that encoding, the LIKE pattern would quietly
+  // match NOTHING: the total would read zero tiles and the migration would
+  // delete nothing, both of which look like honest answers. This test is
+  // what makes that fail loudly instead.
+  it('encodes resolution in the second character, for every resolution', () => {
+    for (let res = 0; res <= 15; res++) {
+      const cell = latLngToCell(...MONTERREY, res);
+      expect(getResolution(cell), `res ${res} round-trips`).toBe(res);
+      expect(cell[1], `res ${res} nibble`).toBe(res.toString(16));
+    }
+  });
+
+  it('builds a SQL LIKE pattern that matches exactly its own resolution', () => {
+    // Mirrors what Postgres does with `_` as a single-character wildcard.
+    const matches = (pattern: string, cell: string) =>
+      new RegExp(`^${pattern.replace(/_/g, '.').replace(/%/g, '.*')}$`).test(cell);
+
+    for (let res = 8; res <= 14; res++) {
+      const pattern = tileResLikePattern(res);
+      expect(matches(pattern, latLngToCell(...MONTERREY, res)), `res ${res} matches`).toBe(true);
+      expect(
+        matches(pattern, latLngToCell(...MONTERREY, res === 14 ? 8 : res + 1)),
+        `res ${res} excludes its neighbour`,
+      ).toBe(false);
+    }
+  });
+
+  it('defaults to the resolution the app actually claims at', () => {
+    expect(tileResLikePattern()).toBe(`_${DEFAULT_TILE_RES.toString(16)}%`);
+    expect(DEFAULT_TILE_RES).toBe(12);
   });
 });

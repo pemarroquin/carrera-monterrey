@@ -9,10 +9,11 @@ import type { Session } from '@supabase/supabase-js';
 
 import { ensureSession, supabase, TERRITORY_ENABLED } from '@/lib/supabase';
 import type { LeaderboardRun, TileOwnerRow } from '@/lib/leaderboard';
+import { isReservedNickname } from '@/lib/nickname';
 import { setCachedDisplayName } from '@/lib/profile-cache';
 import { nearestRegion } from '@/lib/regions';
 import type { FenceResult, LatLng } from '@/lib/territory';
-import { pathToTiles } from '@/lib/tiles';
+import { isCurrentTileRes, pathToTiles, tileResLikePattern } from '@/lib/tiles';
 import type { TrackPoint } from '@/lib/tracking';
 
 /** Every outcome type below is this same shape with a different `ok: true`
@@ -607,7 +608,12 @@ export async function fetchMyTileTotal(regionId: string | null): Promise<TileTot
     let query = supabase
       .from('territory_tiles')
       .select('h3', { count: 'exact', head: true })
-      .eq('owner_id', session.user.id);
+      .eq('owner_id', session.user.id)
+      // Only cells at the resolution this build claims at. Without it, any
+      // not-yet-converted res-11 row still counts and the total reads high
+      // — see isCurrentTileRes' doc. Done as a LIKE because this query
+      // deliberately returns a count and never the cell strings.
+      .like('h3', tileResLikePattern());
     if (regionId !== null) query = query.eq('region_id', regionId);
 
     const { count, error } = await query;
@@ -695,7 +701,11 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
     // resolves `profiles(display_name)`.
     const { data, error } = await supabase
       .from('territory_tiles')
-      .select('owner_id, region_id, runs(flagged)');
+      // h3 is selected purely to filter on resolution — see the loop below.
+      // A leaderboard that mixed resolutions would rank a runner with
+      // unconverted res-11 tiles against runners counted in res-12 ones,
+      // which is not one ranking at all.
+      .select('h3, owner_id, region_id, runs(flagged)');
 
     if (error || !data) return { ok: false, reason: 'network' };
 
@@ -720,6 +730,11 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
         skipped++;
         continue;
       }
+      // Not counted and NOT counted as skipped: `skipped` reports rows that
+      // are malformed, and an unconverted tile is intact — it simply
+      // belongs to the previous resolution. Lumping it in would make the
+      // pre-migration window look like data corruption.
+      if (!isCurrentTileRes(row.h3)) continue;
       // Same normalise-object-or-array defensiveness as fetchLeaderboard's
       // `profiles` embed — depends on how PostgREST infers the relationship.
       const runRel = Array.isArray(row.runs) ? row.runs[0] : row.runs;
@@ -736,7 +751,11 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
 
 export type ProfileOutcome =
   | { ok: true; displayName: string | null }
-  | { ok: false; reason: 'disabled' | 'auth' | 'network' };
+  // 'taken' and 'reserved' are specific to updateDisplayName — a nickname is
+  // this app's identity, so "someone already has it" and "nobody may have
+  // it" are things the runner can ACT on, and must not collapse into the
+  // generic 'network' failure that tells them to check their connection.
+  | { ok: false; reason: 'disabled' | 'auth' | 'network' | 'taken' | 'reserved' };
 
 /** This device's own profile row (anonymous identity — see supabase.ts). */
 export async function fetchMyProfile(): Promise<ProfileOutcome> {
@@ -770,15 +789,33 @@ export const DISPLAY_NAME_MAX = 24;
  * profile row.
  */
 export async function updateDisplayName(name: string): Promise<ProfileOutcome> {
-  return withSession<{ displayName: string | null }>(async (session) => {
+  // 'taken' | 'reserved' as the extra reasons R — the same mechanism
+  // deleteRun uses for its 'denied', so these two stay off every OTHER
+  // ProfileOutcome caller's type.
+  return withSession<{ displayName: string | null }, 'taken' | 'reserved'>(async (session) => {
     const trimmed = name.trim().slice(0, DISPLAY_NAME_MAX);
     // An empty string would render as a nameless row; store a real null so
     // the UI's "anonymous" fallback is the single code path for "no name".
     const value = trimmed.length > 0 ? trimmed : null;
 
+    // Checked before the round trip, and only for a real name — clearing
+    // your nickname back to Anonymous is always allowed.
+    if (value !== null && isReservedNickname(value)) return { ok: false, reason: 'reserved' };
+
     const { error } = await supabase
       .from('profiles')
       .upsert({ id: session.user.id, display_name: value }, { onConflict: 'id' });
+    // 23505 is Postgres' unique_violation, raised here by
+    // profiles_display_name_unique_idx: someone else holds this nickname.
+    // Matched by CODE, never by the error message — that text carries the
+    // index name and is not a stable contract.
+    //
+    // If that migration has not been applied yet this branch simply never
+    // fires and duplicates save as they always did: the honest failure mode
+    // for an unapplied migration in this repo (they are all applied by
+    // hand), and it fails OPEN — nobody is blocked from saving a name by a
+    // rule the database is not enforcing.
+    if (error?.code === '23505') return { ok: false, reason: 'taken' };
     if (error) return { ok: false, reason: 'network' };
     // Only after the server confirmed it — caching an unsaved name would
     // show the runner a value that isn't on the leaderboard.

@@ -72,7 +72,8 @@
     "check-env": "node scripts/check-web-env.mjs",
     "tiles-preview": "node scripts/tiles-preview.mjs",
     "geometry-audit": "node scripts/geometry-audit.mjs",
-    "audit-territories": "node scripts/audit-territories.mjs"
+    "audit-territories": "node scripts/audit-territories.mjs",
+    "convert-tile-res": "vite-node --config vitest.config.ts scripts/convert-tile-res.ts"
   },
   "private": true
 }

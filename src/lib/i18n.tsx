@@ -420,9 +420,24 @@ const translations = {
       displayName: 'Nombre en la tabla',
       displayNamePlaceholder: 'Anónimo',
       displayNameHint:
-        'Es el nombre que ven los demás en la tabla de posiciones. Déjalo vacío para aparecer como Anónimo.',
+        'Es el nombre que ven los demás en la tabla de posiciones, y solo tú puedes tenerlo. Déjalo vacío para aparecer como Anónimo.',
       displayNameSaved: 'Nombre guardado',
       displayNameFailed: 'No pudimos guardar tu nombre. Revisa tu conexión.',
+      // Save/discard for an EDIT of a name that already exists. The
+      // leaderboard reads profiles(display_name) live on every fetch, so a
+      // rename is retroactive: it relabels every entry you already have,
+      // not just the ones from here on. Hence an explicit commit instead of
+      // the save-on-blur that still handles naming yourself the first time.
+      displayNameDirtyHint:
+        'Cambiar tu nombre lo actualiza en toda la tabla, también en tus posiciones anteriores.',
+      displayNameSave: 'Guardar',
+      displayNameDiscard: 'Descartar',
+      // Uniqueness: one name field, and it is the identity on a ranked list
+      // (see nickname.ts). 'Taken' and 'reserved' are things the runner can
+      // fix, so they never collapse into displayNameFailed's "check your
+      // connection".
+      displayNameTaken: 'Ese nombre ya lo tiene alguien más. Prueba con otro.',
+      displayNameReserved: 'Ese nombre está reservado. Elige otro.',
       // Profile section (Settings tab redesign) — the identity concerns
       // grouped at the top of the screen, plus the honest statement of
       // account status the owner asked for.
@@ -845,9 +860,15 @@ const translations = {
       displayName: 'Leaderboard name',
       displayNamePlaceholder: 'Anonymous',
       displayNameHint:
-        'The name others see on the leaderboard. Leave it empty to show up as Anonymous.',
+        'The name others see on the leaderboard, and only you can have it. Leave it empty to show up as Anonymous.',
       displayNameSaved: 'Name saved',
       displayNameFailed: "We couldn't save your name. Check your connection.",
+      displayNameDirtyHint:
+        'Changing your name updates it across the whole leaderboard, including your past standings.',
+      displayNameSave: 'Save',
+      displayNameDiscard: 'Discard',
+      displayNameTaken: 'That name is already taken. Try another one.',
+      displayNameReserved: 'That name is reserved. Pick another one.',
       // Profile section (Settings tab redesign) — the identity concerns
       // grouped at the top of the screen, plus the honest statement of
       // account status the owner asked for.

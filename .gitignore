@@ -63,3 +63,9 @@ example
 
 # Claude Code worktree metadata (local tooling, never source)
 .claude/
+
+# Generated one-off data backfills (npm run convert-tile-res). Regenerable
+# from the live database at any time, and they embed a person's own location
+# history — that does not belong in git permanently. The SCHEMA half of any
+# such change lives in supabase/migrations/ and IS committed.
+supabase/generated/

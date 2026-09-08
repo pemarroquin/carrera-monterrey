@@ -7,18 +7,72 @@
 // h3-js v4 API (verified against the installed package, not assumed from
 // memory — v3 used different names: geoToH3, h3Line): latLngToCell,
 // gridPathCells, cellToBoundary, cellToParent.
-import { gridPathCells, latLngToCell } from 'h3-js';
+import { getResolution, gridPathCells, latLngToCell } from 'h3-js';
 
 import { MAX_BRIDGE_DISTANCE_M, MAX_BRIDGE_SPEED_MS } from '@/lib/gap-policy';
 import { haversineM, type LatLng } from '@/lib/territory';
 
 /**
- * H3 resolution for claimed tiles: ~25 m edge, ~2,150 m² per tile.
- * Street-scale — GPS error mostly stays inside one tile at this size.
- * res 10 (66 m edge) is too coarse (whole blocks in one tile); res 12 (9 m)
- * is below the noise floor. See the brief §1.
+ * H3 resolution for claimed tiles: ~10.8 m edge, ~307 m² per tile.
+ *
+ * Raised from 11 (~28.7 m edge, ~2,150 m²) on 2026-09-07, the owner's
+ * explicit call after being shown this exact trade. He asked for tiles
+ * "15x smaller"; H3 resolutions step by a FIXED factor of 7 in area, so 15x
+ * does not exist — res 12 is 7.0x smaller and res 13 is 49x. Verified
+ * against the installed package (getHexagonAreaAvg), not from memory.
+ *
+ * This reverses what this comment used to say — that res 12 "is below the
+ * noise floor" — so the reasoning stays recorded rather than looking like
+ * an oversight to be "corrected" back:
+ *
+ *  - The concern is real and was not disproven. Consumer GPS is accurate to
+ *    ~5-10 m, which at a 10.8 m edge is a large fraction of a tile. Expect
+ *    the same street run twice to claim somewhat different tiles, and
+ *    expect a stationary runner to claim a small spread rather than one
+ *    cell. Finer tiles buy resolution, NOT accuracy.
+ *  - It was accepted anyway for the denominator: coverage is headed for
+ *    "% of a municipio" (see the backlog's NEXT), and at res 11 a 400-tile
+ *    run reads as 0.27% of Monterrey — a number too coarse to move.
+ *  - Cost: ~7x more rows per run upload and ~7x more polygons drawn.
+ *
+ * res 10 (75.9 m edge) remains far too coarse — whole blocks in one tile.
+ * See the brief §1 for the original framing.
  */
-export const DEFAULT_TILE_RES = 11;
+export const DEFAULT_TILE_RES = 12;
+
+/**
+ * Whether a stored cell belongs to the resolution the app currently claims
+ * at.
+ *
+ * Needed because the two can coexist. Resolution changed from 11 to 12 on
+ * 2026-09-07, and the conversion of already-stored tiles is a migration
+ * applied BY HAND (nothing in this repo runs them — see CLAUDE.md), so
+ * there is a real window where the deployed app claims res-12 cells while
+ * res-11 rows are still in the table. Counting both would silently inflate
+ * every total — the tile is the unit of the score, and a res-11 cell is 7
+ * of them. An unapplied migration must read as "your old tiles aren't
+ * converted yet", never as "you own 8x more ground than you do".
+ */
+export function isCurrentTileRes(h3: string, res: number = DEFAULT_TILE_RES): boolean {
+  return getResolution(h3) === res;
+}
+
+/**
+ * The same filter as a SQL LIKE pattern, for the one read that must stay a
+ * server-side COUNT and so never sees the cell strings at all
+ * (fetchMyTileTotal — see its own comment about not downloading anything
+ * but a number).
+ *
+ * An H3 index is 15 hex characters and its SECOND character is the
+ * resolution nibble: res 10 is "8a…", 11 "8b…", 12 "8c…", 13 "8d…". That is
+ * the documented H3 v4 bit layout (bits 52-55), and tiles.test.ts asserts
+ * it against h3-js itself for every resolution 0-15, so if the encoding
+ * ever changed the suite fails loudly instead of this pattern silently
+ * matching nothing — which would read as "you own zero tiles".
+ */
+export function tileResLikePattern(res: number = DEFAULT_TILE_RES): string {
+  return `_${res.toString(16)}%`;
+}
 
 export interface TilePoint extends LatLng {
   /** Epoch ms — the GPS fix's own timestamp. Required, not optional: without
@@ -93,8 +147,8 @@ export interface PathToTilesResult {
  * Converts a recorded GPS path into the set of H3 cells it covers.
  *
  * Does NOT just map each fix to a cell — at the tracker's 2s/3m throttle,
- * consecutive fixes can be 30-50m apart, further than one res-11 tile's
- * ~25m edge, so a naive per-fix conversion leaves holes in the trail. Looks
+ * consecutive fixes can be 30-50m apart, several times one res-12 tile's
+ * ~10.8m edge, so a naive per-fix conversion leaves holes in the trail. Looks
  * almost right, which is the worst kind of wrong (brief §3). Consecutive
  * DISTINCT cells are bridged with H3's own gridPathCells so the covered
  * area is contiguous, the way the runner's actual path was — UNLESS the

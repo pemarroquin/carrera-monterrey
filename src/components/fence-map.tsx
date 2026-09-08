@@ -27,6 +27,7 @@ import MapView, { Polygon, Polyline } from 'react-native-maps';
 import type { MultiPolygon, Polygon as GeoPolygon } from 'geojson';
 
 import { Icon } from '@/components/ui/icon';
+import { BottomTabInset, Spacing } from '@/constants/theme';
 import {
   fenceColorForRun,
   GOOGLE_DARK_MAP_STYLE,
@@ -52,7 +53,7 @@ interface FenceMapProps {
    *  is a shareable surface; the whole reason privacy-zone trimming exists
    *  is so start/end aren't exposed here. */
   path: LatLng[];
-  /** Tile Coverage brief §6 step 4 — this run's covered H3 cells (res 11,
+  /** Tile Coverage brief §6 step 4 — this run's covered H3 cells (DEFAULT_TILE_RES,
    *  tiles.ts's pathToTiles), rendered as the fill that used to be the
    *  enclosure polygon's. This is what actually reads as "your territory"
    *  now; the polygon above is demoted to a thin outline (see the render
@@ -354,10 +355,15 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, overflow: 'hidden' },
   mapControls: {
     position: 'absolute',
-    right: 16,
-    bottom: 16,
+    right: Spacing.three,
+    // Clears the floating pill tab bar, exactly as track-map's own
+    // cameraControls does. A raw `bottom: 16` put the LOWEST button in this
+    // column — zoom out — entirely inside the tab bar's 96px band, so on the
+    // run-summary screen (this component's only caller, a tab screen) it read
+    // as simply missing. Reported 2026-09-07.
+    bottom: BottomTabInset + Spacing.three,
     alignItems: 'center',
-    gap: 10,
+    gap: Spacing.two,
   },
   mapButton: {
     width: 52,
