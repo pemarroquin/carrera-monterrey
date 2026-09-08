@@ -1,3 +1,38 @@
+-- ============================================================================
+-- BLOCKED — DO NOT RUN. Kept for the reasoning, not to be applied.
+-- ============================================================================
+-- Attempted 2026-09-08. Failed at the first statement:
+--
+--   ERROR: 0A000: extension "h3" is not available
+--   DETAIL: Could not open extension control file
+--           ".../extension/h3.control": No such file or directory
+--
+-- Not a dashboard toggle — the extension is not installed on the instance at
+-- all. Nothing was applied; the migration failed loudly by design rather
+-- than half-applying or quietly installing a weaker guard.
+--
+-- WHY IT CANNOT BE SALVAGED IN SQL. The check needs one thing: turning a
+-- stored H3 cell id back into a coordinate, so claimed cells can be compared
+-- against the path the run recorded. Only h3 can do that.
+--
+-- The obvious substitute does NOT work, and it is worth writing down so
+-- nobody rebuilds it. H3 ids are hierarchical, so an ancestor is derivable
+-- by truncation in plain SQL, and cells 500 m apart share a res-6 ancestor
+-- while Monterrey and CDMX do not — verified. That allows comparing claimed
+-- cells TO EACH OTHER without the extension. It is useless against the
+-- actual threat: a forger targeting one runner's park submits that park's
+-- cells as "visited", they are all mutually near, and the check passes
+-- trivially. Comparing client-supplied cells against other client-supplied
+-- cells proves coherence with nothing.
+--
+-- Tying cells to raw_path is the only version with teeth, and that needs
+-- lat/lng -> cell on the server. See the backlog for the two real options
+-- (an Edge Function, or a scheduled verifier running the app's OWN
+-- TypeScript so the logic is never duplicated).
+--
+-- Everything below is the original file, unchanged.
+-- ============================================================================
+
 -- Claims must be NEAR THE RUN THAT CLAIMED THEM.
 --
 -- Conquest removed the guarantee that ownership cannot be stolen. What
