@@ -47,7 +47,7 @@ import {
   type TileClaimResult,
 } from '@/lib/territory-sync';
 import { DEFAULT_TILE_RES, pathToTiles } from '@/lib/tiles';
-import { formatArea, formatDistance, formatDuration, useRunTracker } from '@/lib/tracking';
+import { formatDistance, formatDuration, useRunTracker } from '@/lib/tracking';
 import { enqueueRun, flushQueue, queuedCount, removeQueued } from '@/lib/upload-queue';
 import { useCurrentLocation } from '@/lib/use-current-location';
 
@@ -766,17 +766,14 @@ export default function TrackScreen() {
           {masked?.masked && !masked.fullyInsideZone && (
             <Text style={[styles.noticeSmall, styles.onDarkNotice]}>{t('track.zoneMasked')}</Text>
           )}
-          {/* The "joining" half of brief §6 step 5's transition (see this
-              PR's report): the enclosure area is still computed and
-              uploaded every run (fence/area_m2 — brief §4 keeps them), shown
-              here small and explicitly labelled as no longer authoritative
-              — a sanity check against the old model on the exact screen
-              that used to trust it, not a competing "real" number. */}
-          {fence && (
-            <Text style={[styles.noticeSmall, styles.onDarkNotice]}>
-              {t('track.legacyArea', { area: formatArea(fence.areaM2) })}
-            </Text>
-          )}
+          {/* The "Old model: N m2 (no longer counts)" line lived here. It was
+              the joining half of the tile migration — a sanity check against
+              the enclosure model on the exact screen that used to trust it.
+              Removed 2026-09-08, Pedro's call: it printed a large number
+              directly under the number that counts while saying it does not
+              count, which is a migration-era crutch that outlived its
+              migration. `fence`/`area_m2` are still computed and uploaded
+              every run (brief §4 keeps them) — this only stops showing it. */}
 
           {/* First-save leaderboard name prompt — fully self-contained,
               decides on its own whether there's anything to ask (see

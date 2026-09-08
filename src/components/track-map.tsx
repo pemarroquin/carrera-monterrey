@@ -26,7 +26,7 @@
 // camera was hardcoded `heading: 0` (never rotated to face the direction of
 // travel). Both are fixed below, reusing this repo's existing camera-control
 // button language 1:1 with web.
-import { cellToBoundary } from 'h3-js';
+import { cellsToMultiPolygon } from 'h3-js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type ColorValue } from 'react-native';
 import MapView, { Polygon, Polyline } from 'react-native-maps';
@@ -379,8 +379,29 @@ export function TrackMap({
   // (a visual "trail so far"), tiles are the actual claimed-ground fill.
   // cellToBoundary's default [lat,lng] pairs are already react-native-maps'
   // {latitude,longitude} order once mapped.
+  // ONE dissolved shape per region, not one polygon per hexagon.
+  // cellsToMultiPolygon merges the set — the same call enclosure.ts uses to
+  // find enclosed ground, so the two cannot disagree about the boundary.
+  //
+  // Enclosure changed the scale here: a run used to claim a few hundred
+  // cells along its path, and a 10 km loop now claims ~25,900. Mounting
+  // 25,900 <Polygon> components is not something react-native-maps should
+  // be asked to do. Dissolving also drops the internal edges, so territory
+  // reads as one area rather than a quilt.
+  //
+  // Holes are dropped: react-native-maps takes an outer ring plus a
+  // separate `holes` prop, and an enclosed region is claimed ground here
+  // anyway (that is what enclosure means), so there is nothing to cut out.
   const tilePolys = useMemo(
-    () => tiles.map((h3) => ({ h3, coords: cellToBoundary(h3).map(([lat, lng]) => ({ latitude: lat, longitude: lng })) })),
+    () =>
+      tiles.length === 0
+        ? []
+        : cellsToMultiPolygon(tiles).map((rings, i) => ({
+            key: `tile-region-${i}`,
+            // Default (non-GeoJSON) output is [lat, lng], already
+            // react-native-maps' order once mapped.
+            coords: rings[0].map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+          })),
     [tiles],
   );
 
@@ -406,7 +427,7 @@ export function TrackMap({
             on top of the real claimed-ground fill. */}
         {tilePolys.map((p) => (
           <Polygon
-            key={`tile-${p.h3}`}
+            key={p.key}
             coordinates={p.coords}
             fillColor={withAlpha(fenceColor, TILE_FILL_OPACITY)}
             strokeColor={withAlpha(fenceColor, 0.0)}

@@ -31,7 +31,7 @@
 // the fill's own rim, FILL_OUTLINE_SRC) flows ROUTE_GRADIENT along itself
 // via gradient-flow.ts. Both are plain setInterval timers, not
 // requestAnimationFrame loops — see the pulse-dot comment below.
-import { cellToBoundary } from 'h3-js';
+import { cellsToMultiPolygon } from 'h3-js';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import type { GeoJSONSource, Map as MapboxMap, Marker } from 'mapbox-gl';
 import mapboxGlPkg from 'mapbox-gl/package.json';
@@ -106,20 +106,35 @@ const FILL_OUTLINE_SRC = 'run-fill-outline';
 const TILES_SRC = 'run-tiles';
 const PULSE_STYLE_ID = 'track-pulse-style';
 
-// See fence-map.web.tsx's own copy of this helper for why the ring needs
-// closing — h3-js's boundary doesn't repeat its first point, GeoJSON
-// polygons require it to.
+/**
+ * The claimed cells as ONE dissolved shape, not one polygon per hexagon.
+ *
+ * cellsToMultiPolygon merges the set and returns its outline(s), holes and
+ * all — the same call enclosure.ts uses to find enclosed ground, so the two
+ * can never disagree about where the boundary is.
+ *
+ * Why it matters here: enclosure changed the scale of this. A run used to
+ * claim a few hundred cells along its path; a 10 km loop now claims ~25,900,
+ * and handing Mapbox 25,900 separate polygons every recompute is a lot of
+ * geometry for a shape that is visually one region. Dissolving also removes
+ * the internal edges, so the territory reads as one area rather than a
+ * quilt.
+ *
+ * The rings come back GeoJSON-wound ([lng, lat]) and already closed, which
+ * is why this no longer repeats the first point the way the per-hexagon
+ * version had to.
+ */
 function tileFeatureCollection(cells: string[]): FeatureCollection {
+  if (cells.length === 0) return { type: 'FeatureCollection', features: [] };
   return {
     type: 'FeatureCollection',
-    features: cells.map((h3): Feature => {
-      const boundary = cellToBoundary(h3, true) as [number, number][];
-      return {
+    features: cellsToMultiPolygon(cells, true).map(
+      (rings): Feature => ({
         type: 'Feature',
         properties: {},
-        geometry: { type: 'Polygon', coordinates: [[...boundary, boundary[0]]] },
-      };
-    }),
+        geometry: { type: 'Polygon', coordinates: rings },
+      }),
+    ),
   };
 }
 
