@@ -89,8 +89,17 @@ export interface RunUpload {
  * claimed nothing (an empty path, or every cell already owned).
  */
 export interface TileClaimResult {
-  /** Cells this run claimed for the FIRST time — brand new territory. */
+  /** Cells this run claimed for the FIRST time — ground nobody held. */
   claimedCount: number;
+  /** Cells TAKEN from another runner: they held it, this run finished later.
+   *  Separate from claimedCount because "new ground" and "ground won off
+   *  someone" are different achievements and the summary says so. */
+  takenCount: number;
+  /** Cells this run covered and did NOT get, because the tile is held by a
+   *  run that finished LATER than this one. The honest count behind "you ran
+   *  here and it still isn't yours" — most often a stale upload landing after
+   *  someone else's newer run. */
+  skippedOlder: number;
   /** Cells this run's path crossed that were ALREADY someone else's by the
    *  time this claim ran. Under first-to-claim these are never actually
    *  taken — the primary key + ON CONFLICT DO NOTHING means an existing
@@ -117,7 +126,12 @@ export interface TileClaimResult {
 
 export type TileClaimOutcome =
   | { ok: true; result: TileClaimResult }
-  | { ok: false; reason: 'disabled' | 'auth' | 'network' | 'rejected' };
+  // 'tooOld': the run finished outside the claim window, so it saved but
+  // took no ground. A distinct reason because it is the one failure here
+  // that is neither a bug nor an accusation — the runner did nothing wrong,
+  // the upload simply arrived too late to compete, and the UI has to be able
+  // to say that rather than implying either.
+  | { ok: false; reason: 'disabled' | 'auth' | 'network' | 'rejected' | 'tooOld' };
 
 /**
  * Distinctive prefix the §2.5 forgery-guard trigger's RAISE EXCEPTION
@@ -150,6 +164,12 @@ const FORGERY_GUARD_MARKER = 'TILE_FORGERY_GUARD';
  * bookkeeping is what prevents the run row itself from being inserted
  * twice — see uploadRun's callers in index.tsx).
  */
+/** Marker in the claim function's "too old to claim" exception. Matched on
+ *  text because plpgsql raises all of these with the generic P0001 code. */
+const CLAIM_TOO_OLD_MARKER = 'CLAIM_TOO_OLD';
+/** Marker for a run claiming more tiles than its distance could enclose. */
+const CLAIM_IMPLAUSIBLE_MARKER = 'CLAIM_IMPLAUSIBLE';
+
 export async function claimTiles(
   runId: string,
   cells: string[],
@@ -169,82 +189,75 @@ export async function claimTiles(
    */
   enclosed: string[] = [],
 ): Promise<TileClaimOutcome> {
-  return withSession<{ result: TileClaimResult }, 'rejected'>(async (session) => {
+  return withSession<{ result: TileClaimResult }, 'rejected' | 'tooOld'>(async (session) => {
     if (cells.length === 0) {
-      return { ok: true, result: { claimedCount: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] } };
+      return {
+        ok: true,
+        result: { claimedCount: 0, takenCount: 0, skippedOlder: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] },
+      };
     }
 
-    // Visits: only ground actually crossed.
-    const { error: visitError } = await supabase
-      .from('tile_visits')
-      .insert(cells.map((h3) => ({ h3, user_id: session.user.id, run_id: runId })));
-    if (visitError) {
-      // A raised exception from the plausibility trigger comes back as a
-      // Postgres error (not a thrown JS exception — withSession's own
-      // try/catch is for network-level failures, this is a normal
-      // {data,error} response), with our own RAISE EXCEPTION message text
-      // as `message`. Matched by prefix rather than a Postgres SQLSTATE:
-      // plpgsql's plain `raise exception` uses the generic P0001 code,
-      // which isn't specific enough to distinguish this from any other
-      // trigger error on the same table.
-      if (visitError.message?.includes(FORGERY_GUARD_MARKER)) {
+    // ONE server-side call, not three client statements.
+    //
+    // Conquest cannot be expressed from here: "take this tile only if my run
+    // finished later than the run holding it" is a conditional upsert, and
+    // PostgREST has no way to send that WHERE clause. It also should not be
+    // expressed from here — the window, the future-date check and the claim
+    // bound are rules about what a client is allowed to assert, so they
+    // belong somewhere the client cannot argue with them. See
+    // supabase/migrations/20260908010000_conquest.sql.
+    //
+    // The function writes tile_visits for `cells` only and territory_tiles
+    // for cells + enclosed, so the plausibility trigger still bounds a run's
+    // VISITS against its distance while enclosure claims more ground than
+    // distance covers. Same split as before, now enforced server-side.
+    const { data: claimRows, error: claimError } = await supabase.rpc('claim_run_tiles', {
+      p_run_id: runId,
+      p_visited: cells,
+      p_enclosed: enclosed,
+      p_region: regionId,
+    });
+
+    if (claimError) {
+      // Our own RAISE EXCEPTION text arrives as `message`. Matched by marker
+      // rather than SQLSTATE: plpgsql's plain `raise exception` uses the
+      // generic P0001 for all of these, which cannot tell them apart.
+      const message = claimError.message ?? '';
+      if (message.includes(FORGERY_GUARD_MARKER) || message.includes(CLAIM_IMPLAUSIBLE_MARKER)) {
         return { ok: false, reason: 'rejected' };
       }
+      if (message.includes(CLAIM_TOO_OLD_MARKER)) return { ok: false, reason: 'tooOld' };
       return { ok: false, reason: 'network' };
     }
 
-    // First-to-claim: the constraint IS the rule (brief §2). `.select('h3')`
-    // on an ON CONFLICT DO NOTHING upsert returns ONLY the rows Postgres
-    // actually inserted — a conflicting row is silently skipped and never
-    // appears here, which is exactly "cells this run claimed for the first
-    // time" with no application-level branching required.
-    // Claims: crossed AND surrounded. Deduplicated because an enclosed cell
-    // can also have been crossed later in the same run (a loop that cuts
-    // back through its own middle), and upsert would otherwise send the same
-    // primary key twice in one statement.
-    const owned = [...new Set([...cells, ...enclosed])];
-    const { data: claimed, error: claimError } = await supabase
-      .from('territory_tiles')
-      .upsert(
-        owned.map((h3) => ({ h3, owner_id: session.user.id, claim_run_id: runId, region_id: regionId })),
-        { onConflict: 'h3', ignoreDuplicates: true },
-      )
-      .select('h3');
-    if (claimError) return { ok: false, reason: 'network' };
+    // returns table(...) comes back as an array of one row.
+    const row = (Array.isArray(claimRows) ? claimRows[0] : claimRows) as
+      | { claimed: number; taken: number; skipped_older: number }
+      | undefined;
+    const claimedCount = row?.claimed ?? 0;
+    const takenCount = row?.taken ?? 0;
+    const skippedOlder = row?.skipped_older ?? 0;
 
-    const claimedSet = new Set((claimed ?? []).map((row) => row.h3));
-    const notNewlyClaimed = cells.filter((h3) => !claimedSet.has(h3));
-
-    // last_visited_at on EVERY visited tile, including ones this claim just
-    // lost the race for — brief §2's "NOT speculative" callout. Best-effort:
-    // a failure here doesn't unwind the claim above, same "the claim is the
-    // point, the timestamp is a garnish" reasoning as fetchMyFences' lostM2.
-    if (cells.length > 0) {
-      await supabase
-        .from('territory_tiles')
-        .update({ last_visited_at: new Date().toISOString() })
-        .in('h3', cells);
-    }
-
-    // Rival tiles: cells this run crossed but did NOT just claim, whose
-    // current owner isn't this session. Distinct from the old spoils
-    // banner's `areaTakenM2` — see TileClaimResult's own doc for why this
-    // is "crossed", never "took", under first-to-claim.
+    // Rival tiles: ground this run crossed that is STILL someone else's now
+    // that the claim has run — i.e. held by a run that finished later than
+    // this one. Under conquest that is the only way to cross a tile and not
+    // own it, which is exactly the `skipped_older` count above; this read
+    // exists to get the cell IDS for the map, not the number.
     let rivalTiles = 0;
     let rivalRunners = 0;
     const rivalCells: string[] = [];
-    if (notNewlyClaimed.length > 0) {
+    if (skippedOlder > 0) {
       const { data: existing } = await supabase
         .from('territory_tiles')
         .select('h3, owner_id')
-        .in('h3', notNewlyClaimed);
+        .in('h3', cells);
       if (existing) {
         const owners = new Set<string>();
-        for (const row of existing) {
-          if (row.owner_id !== session.user.id) {
+        for (const tile of existing) {
+          if (tile.owner_id !== session.user.id) {
             rivalTiles++;
-            rivalCells.push(row.h3);
-            owners.add(row.owner_id);
+            rivalCells.push(tile.h3);
+            owners.add(tile.owner_id);
           }
         }
         rivalRunners = owners.size;
@@ -256,7 +269,7 @@ export async function claimTiles(
 
     return {
       ok: true,
-      result: { claimedCount: claimed?.length ?? 0, rivalTiles, rivalRunners, rivalCells },
+      result: { claimedCount, takenCount, skippedOlder, rivalTiles, rivalRunners, rivalCells },
     };
   });
 }
