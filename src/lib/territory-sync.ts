@@ -65,6 +65,21 @@ export interface RunUpload {
   distanceM: number;
   startedAt: number;
   endedAt: number;
+  /**
+   * Ground this run SURROUNDED, already filtered for the privacy zone.
+   *
+   * Computed by the caller, not here, and that is deliberate: enclosure has
+   * to be derived from the UNMASKED path (masking trims the very section
+   * that closes a loop for anyone who starts and finishes at home), and the
+   * unmasked path never leaves the device. index.tsx computes it where the
+   * full path exists, drops the cells inside the zone at that run's own
+   * jittered cut, and passes only the survivors here. See enclosure.ts.
+   *
+   * Optional so an entry already sitting in the retry queue from a previous
+   * app version — persisted without this field — still uploads, just
+   * without its enclosure.
+   */
+  enclosedCells?: string[];
 }
 
 /**
@@ -135,12 +150,31 @@ const FORGERY_GUARD_MARKER = 'TILE_FORGERY_GUARD';
  * bookkeeping is what prevents the run row itself from being inserted
  * twice — see uploadRun's callers in index.tsx).
  */
-export async function claimTiles(runId: string, cells: string[], regionId: string | null): Promise<TileClaimOutcome> {
+export async function claimTiles(
+  runId: string,
+  cells: string[],
+  regionId: string | null,
+  /**
+   * Ground this run SURROUNDED but never crossed (enclosure.ts). Owned, not
+   * visited — and that distinction is load-bearing in two directions:
+   *
+   *  - `tile_visits` stays a truthful log of ground actually run over, so
+   *    the plausibility trigger that bounds a run's tiles against its
+   *    distance keeps working unmodified. Enclosure deliberately claims far
+   *    more tiles than the distance covers; writing them as visits would
+   *    trip that guard and REJECT every loop run outright.
+   *  - the trade is that claims are no longer fully covered by that guard.
+   *    Stated plainly rather than hidden: the same caveat the guard already
+   *    carries about targeted forgery (see the tile_coverage migration).
+   */
+  enclosed: string[] = [],
+): Promise<TileClaimOutcome> {
   return withSession<{ result: TileClaimResult }, 'rejected'>(async (session) => {
     if (cells.length === 0) {
       return { ok: true, result: { claimedCount: 0, rivalTiles: 0, rivalRunners: 0, rivalCells: [] } };
     }
 
+    // Visits: only ground actually crossed.
     const { error: visitError } = await supabase
       .from('tile_visits')
       .insert(cells.map((h3) => ({ h3, user_id: session.user.id, run_id: runId })));
@@ -164,10 +198,15 @@ export async function claimTiles(runId: string, cells: string[], regionId: strin
     // actually inserted — a conflicting row is silently skipped and never
     // appears here, which is exactly "cells this run claimed for the first
     // time" with no application-level branching required.
+    // Claims: crossed AND surrounded. Deduplicated because an enclosed cell
+    // can also have been crossed later in the same run (a loop that cuts
+    // back through its own middle), and upsert would otherwise send the same
+    // primary key twice in one statement.
+    const owned = [...new Set([...cells, ...enclosed])];
     const { data: claimed, error: claimError } = await supabase
       .from('territory_tiles')
       .upsert(
-        cells.map((h3) => ({ h3, owner_id: session.user.id, claim_run_id: runId, region_id: regionId })),
+        owned.map((h3) => ({ h3, owner_id: session.user.id, claim_run_id: runId, region_id: regionId })),
         { onConflict: 'h3', ignoreDuplicates: true },
       )
       .select('h3');
@@ -287,7 +326,9 @@ export async function uploadRun(run: RunUpload): Promise<SyncOutcome> {
     // ground claimed exactly as it applies to ground enclosed. See tiles.ts
     // §3 for why this isn't a naive per-fix conversion.
     const cells = pathToTiles(run.points).cells;
-    const claim = await claimTiles(data.id, cells, region);
+    // Enclosure comes in already computed and already zone-filtered — see
+    // RunUpload.enclosedCells for why it cannot be derived here.
+    const claim = await claimTiles(data.id, cells, region, run.enclosedCells ?? []);
     return { ok: true, runId: data.id, tiles: claim.ok ? claim.result : null };
   });
 }

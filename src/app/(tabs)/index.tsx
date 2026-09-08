@@ -32,6 +32,7 @@ import { useI18n } from '@/lib/i18n';
 import { getHomeZone } from '@/lib/home-point';
 import { saveLastRunDebug } from '@/lib/last-run-debug';
 import { isImpossiblePace } from '@/lib/pace-guard';
+import { dropCellsInsideZone, enclosedCells } from '@/lib/enclosure';
 import { maskPath, type MaskResult } from '@/lib/privacy-zone';
 import { incrementPilotCounter } from '@/lib/pilot-instrumentation';
 import { getRegion, nearestRegion } from '@/lib/regions';
@@ -45,7 +46,7 @@ import {
   type RunSpoils,
   type TileClaimResult,
 } from '@/lib/territory-sync';
-import { pathToTiles } from '@/lib/tiles';
+import { DEFAULT_TILE_RES, pathToTiles } from '@/lib/tiles';
 import { formatArea, formatDistance, formatDuration, useRunTracker } from '@/lib/tracking';
 import { enqueueRun, flushQueue, queuedCount, removeQueued } from '@/lib/upload-queue';
 import { useCurrentLocation } from '@/lib/use-current-location';
@@ -334,6 +335,11 @@ export default function TrackScreen() {
   // this is every cell the run's path covered; claimedCount (server,
   // async) is the subset that was still unowned at claim time.
   const [sessionTiles, setSessionTiles] = useState<string[]>([]);
+  // Ground this run SURROUNDED, already filtered for the privacy zone.
+  // Separate from sessionTiles because the two are computed from different
+  // paths — see the effect below — and because only sessionTiles may be
+  // logged as visited.
+  const [sessionEnclosed, setSessionEnclosed] = useState<string[]>([]);
 
   useEffect(() => {
     if (tracker.status !== 'finished') return;
@@ -349,6 +355,24 @@ export default function TrackScreen() {
       const builtFence = result.points.length > 0 ? buildFence(result.points) : null;
       setFence(builtFence);
       setSessionTiles(pathToTiles(result.points).cells);
+      // Enclosure comes off the UNMASKED path, unlike everything above it.
+      // It has to: masking trims 200-350 m from each end, which for a
+      // runner who starts and finishes at home is precisely the section
+      // that closes the loop — computed from `result.points` a home loop
+      // would never enclose anything at all. The full path stays on the
+      // device; only the surviving cells are uploaded.
+      //
+      // Filtered at THIS run's own jittered cut (result.cutM), never the
+      // nominal radius: a fixed-radius bite out of every run's claimed area
+      // draws a circle of known size around the home, and three runs fix
+      // its centre — the attack privacy-zone.ts's jitter exists to defeat.
+      setSessionEnclosed(
+        dropCellsInsideZone(
+          enclosedCells(pathToTiles(tracker.points).cells, DEFAULT_TILE_RES),
+          getHomeZone()?.home ?? null,
+          result.cutM,
+        ),
+      );
       // Diagnostic escape hatch (last-run-debug.ts) — the RAW, pre-mask
       // points, so a suspicious area report can be re-run through
       // buildFence() against exactly what was recorded, not what got
@@ -398,7 +422,11 @@ export default function TrackScreen() {
         now - last.atMs >= LIVE_FILL_RECOMPUTE_MS
       ) {
         liveTilesThrottleRef.current = { atMs: now, pointCount: tracker.points.length };
-        setLiveTiles(pathToTiles(tracker.points).cells);
+        // Live, the runner IS the privacy zone's owner and the map is not a
+        // shareable surface, so the unfiltered enclosure is what to show —
+        // the same thing they will own, minus what gets dropped at upload.
+        const live = pathToTiles(tracker.points).cells;
+        setLiveTiles([...live, ...enclosedCells(live, DEFAULT_TILE_RES)]);
       }
     }, 0);
     return () => clearTimeout(id);
@@ -441,6 +469,9 @@ export default function TrackScreen() {
       distanceM: tracker.distanceM,
       startedAt: tracker.startedAt,
       endedAt: tracker.endedAt,
+      // Already zone-filtered above; uploadRun claims these without logging
+      // them as visits. See RunUpload.enclosedCells.
+      enclosedCells: sessionEnclosed,
     };
 
     const outcome = await uploadRun(payload);
@@ -536,7 +567,7 @@ export default function TrackScreen() {
         if (id) clearCheckpoint();
       }
     }
-  }, [fence, masked, queuedId, runRegionId, tracker.distanceM, tracker.startedAt, tracker.endedAt]);
+  }, [fence, masked, sessionEnclosed, queuedId, runRegionId, tracker.distanceM, tracker.startedAt, tracker.endedAt]);
 
   // Task 1 — fire save() itself, exactly once, the moment the finished run
   // has everything save() needs (fence + masked path). Gated on the REF, not
@@ -678,7 +709,9 @@ export default function TrackScreen() {
           // fence-map.web.tsx for why the enclosure polygon's fill is no
           // longer drawn here even though `geometry` is still passed in and
           // still used for the outline/fitBounds).
-          tiles={sessionTiles}
+          // Crossed AND surrounded — the map conveys ownership, and the
+          // runner owns both.
+          tiles={[...sessionTiles, ...sessionEnclosed]}
           // Tile Coverage brief §5 — empty until claimTiles() resolves
           // (tileClaim starts null); see TileClaimResult.rivalCells' own
           // doc comment.
