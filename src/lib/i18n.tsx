@@ -177,21 +177,27 @@ const translations = {
         one: '1 sesión guardada en el teléfono, pendiente de subir.',
         other: '%{count} sesiones guardadas en el teléfono, pendientes de subir.',
       } as PluralForm,
-      // tookArea/tookFrom above are UNCHANGED and stay unused-but-present
-      // (Tile Coverage brief §4: don't delete anything this pass) — the
-      // enclosure model's Phase 3 could actually TAKE ground via
-      // ST_Difference; first-to-claim tiles never can (no decay yet), so
-      // "took" would be a false claim under the new model. crossedTiles/
-      // crossedFrom below say the true, weaker thing: tiles this run ran
-      // over but could not claim because someone already held them.
-      crossedTiles: {
-        one: 'Cruzaste 1 casilla ya tomada',
-        other: 'Cruzaste %{count} casillas ya tomadas',
+      // "Cruzaste" was accurate under first-to-claim: a run could pass over
+      // someone's tile and never get it. Under CONQUEST it is a lie — the
+      // later run TAKES the tile — so these say "took" again, and the count
+      // now comes from the server's own `taken`, not from what the client
+      // inferred. tookArea/tookFrom above stay unused: they are the old
+      // enclosure model's square metres, not tiles.
+      tookTiles: {
+        one: 'Le quitaste 1 casilla',
+        other: 'Le quitaste %{count} casillas',
       } as PluralForm,
-      crossedFrom: {
-        one: 'de 1 corredor',
-        other: 'de %{count} corredores',
+      // The other side of conquest: ground you ran over and did NOT get,
+      // because whoever holds it ran there more recently than you. Says the
+      // reason, because "I ran here and it isn't mine" is otherwise
+      // indistinguishable from a bug.
+      keptByNewer: {
+        one: '1 casilla sigue siendo de alguien que pasó después que tú',
+        other: '%{count} casillas siguen siendo de alguien que pasó después que tú',
       } as PluralForm,
+      // Not a failure and not an accusation: the run saved, it was just
+      // uploaded too late to compete for ground.
+      claimTooOld: 'Subiste esta sesión muy tarde para competir por territorio. Se guardó en tu historial.',
       // Stat-bar label replacing `area` (still defined above, unused by the
       // session-end screen now — see index.tsx) — brief §6 step 5.
       tiles: 'Casillas',
@@ -244,6 +250,10 @@ const translations = {
         one: '1 casilla de sesión marcada',
         other: '%{count} casillas de sesiones marcadas',
       } as PluralForm,
+      // Board 1 counts tiles held RIGHT NOW, and conquest means that number
+      // can fall while you sleep. Said out loud on the board itself, because
+      // a score that drops with no explanation reads as a bug.
+      subtitle: 'Casillas que tienes ahora. Cualquiera puede quitártelas corriendo por ahí.',
       empty: 'Nadie ha conquistado territorio todavía.\nSé el primero.',
       emptyRegion:
         'Nadie ha conquistado territorio en %{city} todavía.\nSé el primero — o mira la tabla global.',
@@ -659,17 +669,17 @@ const translations = {
         one: '1 session saved on your phone, waiting to upload.',
         other: '%{count} sessions saved on your phone, waiting to upload.',
       } as PluralForm,
-      // See the ES entries' comment: tookArea/tookFrom are unchanged and
-      // unused — first-to-claim tiles can't actually TAKE ground (no decay
-      // yet), so crossedTiles/crossedFrom say the true, weaker thing.
-      crossedTiles: {
-        one: 'You crossed 1 tile already claimed',
-        other: 'You crossed %{count} tiles already claimed',
+      // See the ES entries' comment: "crossed" was true under first-to-claim
+      // and is a lie under conquest, where the later run takes the tile.
+      tookTiles: {
+        one: 'You took 1 tile',
+        other: 'You took %{count} tiles',
       } as PluralForm,
-      crossedFrom: {
-        one: 'from 1 runner',
-        other: 'from %{count} runners',
+      keptByNewer: {
+        one: '1 tile stays with a runner who was there more recently',
+        other: '%{count} tiles stay with runners who were there more recently',
       } as PluralForm,
+      claimTooOld: 'This session was uploaded too late to compete for territory. It is saved to your history.',
       tiles: 'Tiles',
       tilesHeld: 'You now hold %{count} tiles in %{region}.',
       tilesUnavailable: "We couldn't confirm your tiles this time — your run is still saved.",
@@ -701,6 +711,7 @@ const translations = {
         one: '1 tile from a flagged run',
         other: '%{count} tiles from flagged runs',
       } as PluralForm,
+      subtitle: 'Tiles you hold right now. Anyone can take them by running there.',
       empty: 'Nobody has captured territory yet.\nBe the first.',
       emptyRegion:
         'Nobody has captured territory in %{city} yet.\nBe the first — or check the global board.',

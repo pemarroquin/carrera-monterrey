@@ -105,6 +105,11 @@ export default function LeaderboardScreen() {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top']}>
       <Text style={[styles.title, { color: c.text }]}>{t('leaderboard.title')}</Text>
+      {/* What this board actually measures. Under first-to-claim the count
+          only ever grew, so it needed no explanation; under conquest it can
+          FALL while the runner sleeps and someone else runs their streets,
+          and a score that drops with no stated reason reads as a bug. */}
+      <Text style={[styles.subtitle, { color: c.textSecondary }]}>{t('leaderboard.subtitle')}</Text>
 
       <View style={styles.segmentRow}>
         {(['region', 'global'] as const).map((key) => {
@@ -276,6 +281,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
+  },
+  subtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.half,
   },
   segmentRow: {
     flexDirection: 'row',

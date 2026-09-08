@@ -134,13 +134,18 @@ export default function TrackScreen() {
   const [, setSpoils] = useState<RunSpoils | null>(null);
   // Tile Coverage brief §6 step 5. `tileClaim` is null until claimTiles()
   // resolves (uploadRun does both in one call — see territory-sync.ts).
-  // `tilesConfirmFailed` disambiguates "still waiting" (both null/false)
+  // `tilesFailure` disambiguates "still waiting" (both null)
   // from "resolved, but the server specifically could not confirm tiles"
   // (the run itself still saved — see uploadRun's own doc comment) — never
   // silently shown as "0 tiles claimed", which would be an unverified
   // success.
   const [tileClaim, setTileClaim] = useState<TileClaimResult | null>(null);
-  const [tilesConfirmFailed, setTilesConfirmFailed] = useState(false);
+  // Why the claim produced nothing, when it did. A boolean used to be enough
+  // ("couldn't confirm"), but conquest added a case that is neither a
+  // failure nor an accusation: a run uploaded past the claim window saved
+  // fine and simply arrived too late to compete for ground. Telling that
+  // runner "we couldn't confirm your tiles" would be false.
+  const [tilesFailure, setTilesFailure] = useState<'tooOld' | 'other' | null>(null);
   // Running Layer-1 total for this run's region (brief §1.5) — the honest
   // stand-in for "% of San Pedro stomped" until the brief §1's real
   // municipio/runnable-tile denominator exists (explicitly out of scope
@@ -284,7 +289,7 @@ export default function TrackScreen() {
           void fetchRunSpoils(resolved.runId).then((taken) => {
             if (!stale && taken.ok && taken.spoils.runsAffected > 0) setSpoils(taken.spoils);
           });
-          // NOT refreshing tileClaim/tilesConfirmFailed/tileTotal here — a
+          // NOT refreshing tileClaim/tilesFailure/tileTotal here — a
           // real, narrow gap, not an oversight. Unlike save()'s direct call,
           // uploadRun ran inside flushQueue (upload-queue.ts), whose
           // Uploader type only surfaces {ok,runId}; the richer `tiles`
@@ -517,11 +522,11 @@ export default function TrackScreen() {
       // for the claim itself, unlike fetchRunSpoils above (a genuinely
       // separate read against a different table). `tiles: null` means the
       // run saved but the claim did not complete — see uploadRun's own doc
-      // comment; surfaced as tilesConfirmFailed, never silently as zero.
+      // comment; surfaced with its reason, never silently as zero.
       if (outcome.tiles) {
         setTileClaim(outcome.tiles);
       } else {
-        setTilesConfirmFailed(true);
+        setTilesFailure(outcome.tilesReason === 'tooOld' ? 'tooOld' : 'other');
       }
       // Running total refresh — independent of whether the claim above
       // succeeded (it reflects every EARLIER run too), so worth trying
@@ -615,7 +620,7 @@ export default function TrackScreen() {
     setFence(null);
     setSessionTiles([]);
     setTileClaim(null);
-    setTilesConfirmFailed(false);
+    setTilesFailure(null);
     setTileTotal(null);
     setQueuedId(null);
     tracker.reset();
@@ -784,24 +789,36 @@ export default function TrackScreen() {
           {/* Tile Coverage brief §6 step 5 — replaces the old "You took X m²
               from N runner(s)" spoils banner (still computed above, no
               longer rendered — see the `spoils` state's own comment).
-              tilesConfirmFailed takes priority over a stale/absent
-              tileClaim: the run saved either way, but this says plainly
-              when the claim itself couldn't be confirmed rather than
-              silently showing nothing. */}
-          {tilesConfirmFailed && (
-            <Text style={[styles.noticeSmall, styles.onDarkNotice]}>{t('track.tilesUnavailable')}</Text>
+              A claim failure takes priority over a stale/absent tileClaim:
+              the run saved either way, but this says plainly what happened
+              rather than silently showing nothing. The two reasons read very
+              differently on purpose — 'tooOld' is not a failure the runner
+              caused. */}
+          {tilesFailure !== null && (
+            <Text style={[styles.noticeSmall, styles.onDarkNotice]}>
+              {t(tilesFailure === 'tooOld' ? 'track.claimTooOld' : 'track.tilesUnavailable')}
+            </Text>
           )}
-          {tileClaim && tileClaim.rivalTiles > 0 && (
+          {/* Ground won off another runner. Under first-to-claim this said
+              "crossed" — a run could pass over someone's tile and never get
+              it. Conquest makes that a lie: the later run takes it. */}
+          {tileClaim && tileClaim.takenCount > 0 && (
             <Animated.View
               entering={FadeInDown.duration(400).delay(200)}
               style={[styles.spoils, { borderColor: fenceColor, backgroundColor: 'rgba(20,20,20,0.65)' }]}>
               <Text style={[styles.spoilsArea, { color: '#ffffff' }]}>
-                {t('track.crossedTiles', { count: tileClaim.rivalTiles })}
-              </Text>
-              <Text style={[styles.spoilsFrom, { color: 'rgba(255,255,255,0.7)' }]}>
-                {t('track.crossedFrom', { count: tileClaim.rivalRunners })}
+                {t('track.tookTiles', { count: tileClaim.takenCount })}
               </Text>
             </Animated.View>
+          )}
+          {/* The other side of it: ground you ran over and did NOT get,
+              because whoever holds it was there more recently. Says the
+              reason — "I ran here and it isn't mine" is otherwise
+              indistinguishable from a bug. */}
+          {tileClaim && tileClaim.skippedOlder > 0 && (
+            <Text style={[styles.noticeSmall, styles.onDarkNotice]}>
+              {t('track.keptByNewer', { count: tileClaim.skippedOlder })}
+            </Text>
           )}
           {/* Running Layer-1 total (brief §1.5) — a plain count, not a
               percentage; see tileTotal's own state comment for why. */}

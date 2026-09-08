@@ -275,7 +275,15 @@ export async function claimTiles(
 }
 
 export type SyncOutcome =
-  | { ok: true; runId: string; tiles: TileClaimResult | null }
+  | {
+      ok: true;
+      runId: string;
+      tiles: TileClaimResult | null;
+      /** Why `tiles` is null, when it is. The run SAVED either way — this
+       *  only explains the claim. 'tooOld' in particular is not a failure
+       *  the runner caused, and the summary must not describe it as one. */
+      tilesReason?: 'tooOld' | 'rejected' | 'network';
+    }
   | { ok: false; reason: 'disabled' | 'auth' | 'network' };
 
 /**
@@ -342,7 +350,14 @@ export async function uploadRun(run: RunUpload): Promise<SyncOutcome> {
     // Enclosure comes in already computed and already zone-filtered — see
     // RunUpload.enclosedCells for why it cannot be derived here.
     const claim = await claimTiles(data.id, cells, region, run.enclosedCells ?? []);
-    return { ok: true, runId: data.id, tiles: claim.ok ? claim.result : null };
+    return {
+      ok: true,
+      runId: data.id,
+      tiles: claim.ok ? claim.result : null,
+      // 'disabled'/'auth' cannot reach here — uploadRun already passed the
+      // same withSession guard to insert the run above.
+      tilesReason: claim.ok ? undefined : (claim.reason as 'tooOld' | 'rejected' | 'network'),
+    };
   });
 }
 
