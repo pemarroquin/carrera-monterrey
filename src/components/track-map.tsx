@@ -55,12 +55,18 @@ import {
 } from '@/constants/map';
 import { bearingFromPath, boundsOfPath, destinationPoint, smoothBearing } from '@/lib/camera';
 import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { gradientStrokeColors, ringToCoords } from '@/lib/fence-draw';
 import { useRegion } from '@/lib/region-context';
 import type { LatLng } from '@/lib/territory';
 
 interface TrackMapProps {
-  points: LatLng[];
+  /** The recorded path. Timestamped, and that is load-bearing: the gap caps
+   *  that decide where this path must NOT be drawn as a continuous line are
+   *  a function of elapsed time as well as distance (see splitLegs). A plain
+   *  LatLng[] here is what let the route render straight across an
+   *  unrecorded background gap. */
+  points: TimedPoint[];
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
@@ -323,14 +329,28 @@ export function TrackMap({
   // run's colour, since react-native-maps has no fill-extrusion — while the
   // newest stretch stays the vibrant gradient line. The two share their join
   // point, so the line feeds visually into the fence.
+  // Legs FIRST — `points` is one flat array with no record of its own seams,
+  // so drawing straight from it joins the two sides of an unrecorded gap
+  // with a straight line (reported on the web build with screenshots
+  // 2026-09-07; the same flat-array assumption is here). splitLegs cuts
+  // exactly where pathToTiles already refuses to bridge.
+  const legs = useMemo(() => splitLegs(points), [points]);
   const { settled, active: liveEdge } = useMemo(
-    () => splitTrailing(points, FENCE_LAG_M),
-    [points],
+    // The live edge can only be in the newest leg, by definition.
+    () => splitTrailing(legs.length > 0 ? legs[legs.length - 1] : [], FENCE_LAG_M),
+    [legs],
   );
-  const ribbonCoords = useMemo(() => {
-    const wall = buildWallPolygon(settled, FENCE_RIBBON_WIDTH_M);
-    return wall ? ringToCoords(wall.geometry.coordinates[0]) : null;
-  }, [settled]);
+  // One ribbon per leg: every completed leg in full, plus the settled part
+  // of the newest. A leg under 2 points yields no polygon and is dropped
+  // rather than drawn as a degenerate sliver.
+  const ribbons = useMemo(
+    () =>
+      [...legs.slice(0, -1), settled]
+        .map((leg) => buildWallPolygon(leg, FENCE_RIBBON_WIDTH_M))
+        .filter((wall): wall is NonNullable<typeof wall> => wall !== null)
+        .map((wall) => ringToCoords(wall.geometry.coordinates[0])),
+    [legs, settled],
+  );
   const edgeCoords = useMemo(
     () => liveEdge.map((p) => ({ latitude: p.lat, longitude: p.lng })),
     [liveEdge],
@@ -375,14 +395,18 @@ export function TrackMap({
             strokeWidth={0}
           />
         ))}
-        {ribbonCoords && (
+        {ribbons.map((coords, i) => (
           <Polygon
-            coordinates={ribbonCoords}
+            // Index key: legs are positional and only ever appended to or
+            // extended at the tail, so an index is stable for everything
+            // before the newest leg and the newest one re-renders anyway.
+            key={`ribbon-${i}`}
+            coordinates={coords}
             fillColor={withAlpha(fenceColor, FENCE_WALL_OPACITY)}
             strokeColor={withAlpha(fenceColor, 0.9)}
             strokeWidth={1}
           />
-        )}
+        ))}
         {edgeCoords.length >= 2 && (
           <Polyline
             coordinates={edgeCoords}

@@ -28,6 +28,7 @@ import type { MultiPolygon, Polygon as GeoPolygon } from 'geojson';
 
 import { Icon } from '@/components/ui/icon';
 import { BottomTabInset, Spacing } from '@/constants/theme';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import {
   fenceColorForRun,
   GOOGLE_DARK_MAP_STYLE,
@@ -40,7 +41,6 @@ import {
   ZOOM_STEP,
 } from '@/constants/map';
 import { gradientStrokeColors, polygonRings, ringToCoords, type MapCoord } from '@/lib/fence-draw';
-import type { LatLng } from '@/lib/territory';
 import type { MyFence } from '@/lib/territory-sync';
 
 interface FenceMapProps {
@@ -51,8 +51,13 @@ interface FenceMapProps {
   geometry: GeoPolygon | MultiPolygon;
   /** The recorded route, MASKED (privacy-zone.ts) — never the raw path. This
    *  is a shareable surface; the whole reason privacy-zone trimming exists
-   *  is so start/end aren't exposed here. */
-  path: LatLng[];
+   *  is so start/end aren't exposed here.
+   *
+   *  Timestamped, and that is load-bearing: a saved run keeps the gaps it
+   *  was recorded with, and the caps deciding where this path must NOT be
+   *  drawn as one continuous line are a function of elapsed time as well as
+   *  distance (see splitLegs). */
+  path: TimedPoint[];
   /** Tile Coverage brief §6 step 4 — this run's covered H3 cells (DEFAULT_TILE_RES,
    *  tiles.ts's pathToTiles), rendered as the fill that used to be the
    *  enclosure polygon's. This is what actually reads as "your territory"
@@ -133,11 +138,16 @@ export function FenceMap({
   // The ROUTE — the actual recorded path, not the fence boundary. Same
   // per-vertex gradient sampling as the live map's edge (track-map.tsx),
   // so the two screens agree.
-  const routeCoords = useMemo(
-    (): MapCoord[] => path.map((pt) => ({ latitude: pt.lat, longitude: pt.lng })),
+  // One polyline per leg, not one across the whole path: a saved run keeps
+  // its unrecorded gaps, and a single line joins both sides of one with a
+  // straight chord across ground the runner never recorded (see splitLegs).
+  const routeLegs = useMemo(
+    () =>
+      splitLegs(path)
+        .filter((leg) => leg.length >= 2)
+        .map((leg): MapCoord[] => leg.map((pt) => ({ latitude: pt.lat, longitude: pt.lng }))),
     [path],
   );
-  const routeColors = useMemo(() => gradientStrokeColors(routeCoords.length), [routeCoords.length]);
 
   const pastPolys = useMemo(
     () =>
@@ -263,18 +273,21 @@ export function FenceMap({
             lineJoin="round"
           />
         ))}
-        {routeCoords.length >= 2 && (
+        {routeLegs.map((coords, i) => (
           // The ROUTE — the actual recorded (masked) path, drawn after the
-          // outline so it renders on top wherever the two overlap.
+          // outline so it renders on top wherever the two overlap. Each leg
+          // gets its own gradient run, same as the web map's per-feature
+          // line-progress.
           <Polyline
-            coordinates={routeCoords}
+            key={`route-leg-${i}`}
+            coordinates={coords}
             strokeWidth={ROUTE_LINE_WIDTH}
             strokeColor={ROUTE_LINE_COLOR}
-            strokeColors={routeColors}
+            strokeColors={gradientStrokeColors(coords.length)}
             lineCap="round"
             lineJoin="round"
           />
-        )}
+        ))}
       </MapView>
       {controls && (
         <View style={styles.mapControls} pointerEvents="box-none">

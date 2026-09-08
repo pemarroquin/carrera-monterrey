@@ -79,6 +79,7 @@ import {
 } from '@/constants/map';
 import { bearingFromPath, boundsOfPath, smoothBearing } from '@/lib/camera';
 import { buildWallPolygon, splitTrailing } from '@/lib/fence-3d';
+import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
 import { useRegion } from '@/lib/region-context';
@@ -111,7 +112,12 @@ function tileFeatureCollection(cells: string[]): FeatureCollection {
 }
 
 interface TrackMapProps {
-  points: LatLng[];
+  /** The recorded path. Timestamped, and that is load-bearing: the gap caps
+   *  that decide where this path must NOT be drawn as a continuous line are
+   *  a function of elapsed time as well as distance (see splitLegs). A plain
+   *  LatLng[] here is what let the route render straight across an
+   *  unrecorded background gap. */
+  points: TimedPoint[];
   running: boolean;
   /** A real fix, or null. Never a fallback — see use-current-location.ts. */
   here: LatLng | null;
@@ -812,7 +818,18 @@ export function TrackMap({
           : smoothBearing(bearingRef.current, rawBearing, MAX_BEARING_STEP_DEG);
     }
 
-    const { settled, active: liveEdge } = splitTrailing(points, FENCE_LAG_M);
+    // Legs FIRST, then the trailing split — `points` is one flat array with
+    // no record of its own seams, so drawing straight from it joins the two
+    // sides of an unrecorded gap with a straight line. On a real iOS Safari
+    // run that showed as a chord from the start point to the runner's
+    // current position, and again as the wall ribbon's two edges (reported
+    // with screenshots 2026-09-07). splitLegs cuts exactly where
+    // pathToTiles already refuses to bridge, so the drawn route and the
+    // claimed tiles agree about what is a hole.
+    const legs = splitLegs(points);
+    // The live edge can only be in the newest leg, by definition.
+    const newestLeg = legs.length > 0 ? legs[legs.length - 1] : [];
+    const { settled, active: liveEdge } = splitTrailing(newestLeg, FENCE_LAG_M);
 
     const routeSource = map.getSource(ROUTE_SRC) as GeoJSONSource | undefined;
     routeSource?.setData({
@@ -824,11 +841,16 @@ export function TrackMap({
       },
     });
 
-    const wall = buildWallPolygon(settled, FENCE_WALL_WIDTH_M);
+    // One ribbon per leg: every completed leg in full, plus the settled part
+    // of the newest one. A single-point leg yields no polygon
+    // (buildWallPolygon returns null under 2 points) and is dropped here
+    // rather than drawn as a degenerate sliver.
+    const wallInputs = [...legs.slice(0, -1), settled];
+    const walls = wallInputs
+      .map((leg) => buildWallPolygon(leg, FENCE_WALL_WIDTH_M))
+      .filter((w): w is NonNullable<typeof w> => w !== null);
     const wallSource = map.getSource(WALL_SRC) as GeoJSONSource | undefined;
-    wallSource?.setData(
-      wall ? { type: 'FeatureCollection', features: [wall] } : { type: 'FeatureCollection', features: [] },
-    );
+    wallSource?.setData({ type: 'FeatureCollection', features: walls });
 
     // Live territory fill — throttled to every LIVE_FILL_RECOMPUTE_POINTS
     // points or LIVE_FILL_RECOMPUTE_MS, whichever comes first, NOT on every

@@ -105,3 +105,65 @@ export function evaluateGap(params: { from: LatLng | null; to: LatLng; dtMs: num
 
   return { chordM, credited };
 }
+
+/** A point that can be tested against the caps: a position plus the fix's own
+ *  timestamp. TrackPoint satisfies this, and so does anything else carrying
+ *  the same two facts. */
+export interface TimedPoint extends LatLng {
+  ts: number;
+}
+
+/**
+ * Splits a recorded path wherever a gap fails the caps — i.e. wherever
+ * `evaluateGap` says the hole must be left alone.
+ *
+ * This is the RENDERING half of the same policy, and it exists because the
+ * recorded `points` array is a single flat list with no record of its own
+ * seams. tracking.ts breaks a leg on `visibilitychange` by nulling
+ * `lastRef`, but that only stops DISTANCE accumulating — the point is still
+ * appended to `points` like any other, so every consumer that draws from
+ * that array joins the two sides of the gap with a straight line. On a real
+ * iOS Safari run (reported with screenshots 2026-09-07) that produced a
+ * chord running hundreds of metres from the start straight to the runner's
+ * current position, plus the same chord doubled as the wall ribbon's two
+ * edges.
+ *
+ * Note the direction this cuts. The module header above forbids using these
+ * caps to ADD geometry — bridging a gap would fabricate ground nobody
+ * proved they held. This does the opposite: it REMOVES a line that was
+ * already being drawn across ground nobody recorded. Same rule, same
+ * caps, and it makes the drawn route agree with the tiles that get claimed
+ * (pathToTiles already refuses to bridge exactly these gaps), instead of
+ * the route quietly claiming more than the tiles do.
+ *
+ * Returns one leg per contiguous run of points. A path with no failing gap
+ * comes back as a single leg, so callers can treat the common case as
+ * `legs[0]`. Empty input returns an empty array — no leg at all, rather
+ * than one empty leg nobody can draw.
+ */
+export function splitLegs<T extends TimedPoint>(points: T[]): T[][] {
+  if (points.length === 0) return [];
+
+  const legs: T[][] = [];
+  let current: T[] = [points[0]];
+
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const point = points[i];
+    const gap = evaluateGap({ from: prev, to: point, dtMs: point.ts - prev.ts });
+
+    // `null` cannot happen here (`from` is always a real point inside this
+    // loop), but an uncredited gap ends the leg. A single-point leg is kept
+    // rather than dropped: it is a real recorded position, and silently
+    // discarding it would under-report where the runner actually was.
+    if (gap && !gap.credited) {
+      legs.push(current);
+      current = [point];
+      continue;
+    }
+    current.push(point);
+  }
+
+  legs.push(current);
+  return legs;
+}
