@@ -1,6 +1,7 @@
 // Tile Coverage brief §6 step 6 — ranks runners by tiles OWNED (a plain
-// `count` over territory_tiles, first-to-claim means one tile has exactly
-// one owner ever — see leaderboard.ts's own header), with a per-metro board
+// `count` over territory_tiles; one tile has exactly one owner at a time,
+// though under conquest not forever — see leaderboard.ts's own header),
+// with a per-metro board
 // and a global one behind a segment. Was area actually held (rankByArea,
 // the union-of-fences pipeline) — that function and its ~30 tests are
 // UNCHANGED and still exported (brief §4: don't delete), just no longer

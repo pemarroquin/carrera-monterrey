@@ -21,7 +21,11 @@ import { Colors, Spacing } from '@/constants/theme';
 import { AREA_NAME_MAX, createArea, isValidAreaName } from '@/lib/areas';
 import { useI18n } from '@/lib/i18n';
 
-type Step = 'ask' | 'saving' | 'failed' | 'done';
+// 'skipped' is NOT 'done'. They were one state, and the result was that
+// tapping "Not now" rendered "Area created. Come back tomorrow to defend
+// it." — a success message for something that never happened, which is the
+// one failure mode this codebase refuses (see the silent-success rule).
+type Step = 'ask' | 'saving' | 'failed' | 'done' | 'skipped';
 
 export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: string | null }) {
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
@@ -39,6 +43,9 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
     // field, so a retry costs nothing.
     setStep(outcome.ok ? 'done' : 'failed');
   }, [name, cells, regionId]);
+
+  // Nothing was created, so say nothing.
+  if (step === 'skipped') return null;
 
   if (step === 'done') {
     return (
@@ -85,7 +92,7 @@ export function AreaPrompt({ cells, regionId }: { cells: string[]; regionId: str
         )}
 
         <View style={styles.actions}>
-          <Pressable onPress={() => setStep('done')} disabled={step === 'saving'} accessibilityRole="button" hitSlop={10}>
+          <Pressable onPress={() => setStep('skipped')} disabled={step === 'saving'} accessibilityRole="button" hitSlop={10}>
             <Text style={[styles.skip, { color: c.textSecondary }]}>{t('track.areaPromptSkip')}</Text>
           </Pressable>
           <Pressable

@@ -100,12 +100,12 @@ export interface TileClaimResult {
    *  here and it still isn't yours" — most often a stale upload landing after
    *  someone else's newer run. */
   skippedOlder: number;
-  /** Cells this run's path crossed that were ALREADY someone else's by the
-   *  time this claim ran. Under first-to-claim these are never actually
-   *  taken — the primary key + ON CONFLICT DO NOTHING means an existing
-   *  owner never loses a tile (no decay in this pass — see the brief §2's
-   *  "NOT speculative" note). This counts what the run ran OVER but could
-   *  not claim, which is a different, weaker claim than the old enclosure
+  /** Cells this run's path crossed that are STILL someone else's after the
+   *  claim ran. Under conquest that has exactly one cause: the holder's run
+   *  finished LATER than this one, so this run could not take it (see
+   *  claim_run_tiles' `where excluded.claimed_at > t.claimed_at`). It is no
+   *  longer "an existing owner never loses a tile" — they do, to anyone who
+   *  runs there more recently. Kept as `rival*` rather than the old enclosure
    *  model's real "took N m² off M runners" transfer (Phase 3's
    *  ST_Difference actually reassigned ground). Naming it `rival*` rather
    *  than reusing `spoils`/`taken*` is deliberate — see index.tsx and the
@@ -934,7 +934,14 @@ export async function fetchMyVisitedCells(): Promise<VisitedOutcome> {
         .from('tile_visits')
         .select('h3')
         .eq('user_id', session.user.id)
+        // Ordered by the FULL primary key, not just h3. tile_visits is keyed
+        // (h3, run_id), so the same cell appears once per run that crossed
+        // it — ordering on h3 alone leaves those rows in an unspecified
+        // order between pages, and offset paging can then skip one. A
+        // skipped row is a cell missing from the runner's history with
+        // nothing to indicate it.
         .order('h3', { ascending: true })
+        .order('run_id', { ascending: true })
         .range(offset, offset + PAGE - 1);
 
       // A partial history is worse than none: it would draw a map missing

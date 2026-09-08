@@ -88,7 +88,7 @@ interface TrackMapProps {
    *  computed and throttled in index.tsx (same cadence as the enclosure
    *  ribbon below, LIVE_FILL_RECOMPUTE_MS/POINTS) and passed down ready to
    *  render, rather than recomputed inside this already-dense component.
-   *  ADDITIVE: the existing ribbon/wall (buildWallPolygon/splitTrailing)
+   *  ADDITIVE: the live edge (splitTrailing)
    *  is unchanged — see this file's own report note on why the live 3D/
    *  camera machinery here was treated as something to add alongside, not
    *  touch. */

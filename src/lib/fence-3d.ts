@@ -1,25 +1,26 @@
-// Geometry for the rising 3D fence wall behind the runner.
+// Splitting a live route into its settled part and its live edge.
 //
-// The route renders in two pieces while a session is live:
-//   - the LAST `FENCE_LAG_M` metres stay a flat gradient line (the "live"
-//     edge, still being drawn),
-//   - everything older than that becomes a wall — a thin ribbon polygon
-//     extruded upward, which is what makes the territory read as fenced in
-//     rather than merely traced.
+// While a session is running the route renders in two pieces: the last
+// FENCE_LAG_M metres stay a flat gradient line (the "live" edge, still being
+// drawn), and everything older than that is already territory.
 //
-// Both pieces share their join point, so the line visually feeds into the
-// wall instead of leaving a gap.
+// The two share their join point, so the line feeds into the ground behind
+// it rather than leaving a gap.
+//
+// This file used to also build a ribbon polygon along the path, extruded to
+// read as a wall. That is gone: the wall is now the TILE footprint
+// (track-map.web.tsx), because a ribbon is one self-intersecting ring
+// wherever a runner doubles back, and Mapbox triangulates it into
+// overlapping triangles that blend against each other — the same street run
+// twice drew twice as dark. Tiles cannot overlap, so they cannot stack.
 //
 // Pure functions with no map/SDK dependency, so the metre maths is unit
 // testable — same reasoning as territory.ts.
-import type { Feature, Polygon } from 'geojson';
-
 import { haversineM, type LatLng } from '@/lib/territory';
 
-const METRES_PER_DEG_LAT = 111_320;
-
 export interface RouteSplit {
-  /** Older part of the route — becomes the extruded wall. */
+  /** Older part of the route — the ground already claimed behind the
+   *  runner. */
   settled: LatLng[];
   /** Most recent stretch — stays a flat line. Shares its first point with
    *  `settled`'s last, so the two render as one continuous route. */
@@ -51,53 +52,4 @@ export function splitTrailing(points: LatLng[], trailingM: number): RouteSplit {
   }
   // Whole route is shorter than the trailing window: nothing has settled yet.
   return { settled: [], active: points };
-}
-
-/**
- * A thin ribbon polygon centred on the path, for `fill-extrusion`.
- *
- * Mapbox can't extrude a LineString, so the wall has to be an actual polygon:
- * the path offset perpendicular by half the wall thickness on one side, then
- * back along the other. Offsets are computed per-point from the local
- * heading, and longitude is scaled by cos(latitude) — without that the wall
- * would be visibly thicker running east-west than north-south.
- */
-export function buildWallPolygon(points: LatLng[], widthM: number): Feature<Polygon> | null {
-  if (points.length < 2) return null;
-
-  const half = widthM / 2;
-  const left: [number, number][] = [];
-  const right: [number, number][] = [];
-
-  for (let i = 0; i < points.length; i++) {
-    const prev = points[Math.max(0, i - 1)];
-    const next = points[Math.min(points.length - 1, i + 1)];
-    const p = points[i];
-
-    const cosLat = Math.cos((p.lat * Math.PI) / 180) || 1e-6;
-    // Heading as a local metre-space vector, so the perpendicular is a plain
-    // 90° rotation rather than a spherical bearing calculation.
-    const dx = (next.lng - prev.lng) * METRES_PER_DEG_LAT * cosLat;
-    const dy = (next.lat - prev.lat) * METRES_PER_DEG_LAT;
-    const len = Math.hypot(dx, dy) || 1;
-
-    // Perpendicular of (dx, dy) is (-dy, dx), normalised then scaled.
-    const offsetXm = (-dy / len) * half;
-    const offsetYm = (dx / len) * half;
-
-    const dLng = offsetXm / (METRES_PER_DEG_LAT * cosLat);
-    const dLat = offsetYm / METRES_PER_DEG_LAT;
-
-    left.push([p.lng + dLng, p.lat + dLat]);
-    right.push([p.lng - dLng, p.lat - dLat]);
-  }
-
-  const ring = [...left, ...right.reverse()];
-  ring.push(ring[0]); // GeoJSON rings must close
-
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'Polygon', coordinates: [ring] },
-  };
 }

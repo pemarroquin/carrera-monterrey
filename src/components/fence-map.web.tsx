@@ -72,6 +72,14 @@ const PAST_SRC = 'fence-past';
 const TILES_SRC = 'fence-tiles';
 const RIVAL_TILES_SRC = 'fence-rival-tiles';
 
+/**
+ * ONE POLYGON PER HEXAGON here, unlike track-map.web.tsx's function of the
+ * same name, which dissolves the set into one shape. Deliberate, and the
+ * owner's call: the running view wants the route plus a single covered area,
+ * while the summary is where the individual tiles are worth seeing. Same
+ * name because both answer "this cell set, as map features"; different
+ * bodies because the two screens want different answers.
+ */
 /** h3-js's cellToBoundary(h3, true) returns [lng,lat] pairs that do NOT
  *  repeat the first point at the end — valid for the app's own react-
  *  native-maps Polygon (fence-map.tsx), but GeoJSON polygon rings must be

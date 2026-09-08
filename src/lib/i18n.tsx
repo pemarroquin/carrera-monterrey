@@ -239,7 +239,6 @@ const translations = {
       // against the old model on the very screen that used to trust it
       // (this whole brief exists because a 3.3km run once auto-closed into
       // 977,565 m² here). Never the headline number again.
-      legacyArea: 'Modelo anterior: %{area} (ya no cuenta para tu territorio)',
     },
     leaderboard: {
       title: 'Tabla de posiciones',
@@ -738,9 +737,6 @@ const translations = {
       tiles: 'Tiles',
       tilesHeld: 'You now hold %{count} tiles in %{region}.',
       tilesUnavailable: "We couldn't confirm your tiles this time — your run is still saved.",
-      // See the ES entry's comment: legacy enclosure area, shown small and
-      // explicitly labelled as no-longer-authoritative.
-      legacyArea: 'Old model: %{area} (no longer counts toward your territory)',
     },
     leaderboard: {
       title: 'Leaderboard',

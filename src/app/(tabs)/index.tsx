@@ -42,9 +42,7 @@ import { notifyRunSaved } from '@/lib/save-events';
 import { buildFence, type FenceResult } from '@/lib/territory';
 import {
   fetchMyTileTotal,
-  fetchRunSpoils,
   uploadRun,
-  type RunSpoils,
   type TileClaimResult,
 } from '@/lib/territory-sync';
 import { DEFAULT_TILE_RES, pathToTiles } from '@/lib/tiles';
@@ -125,14 +123,6 @@ export default function TrackScreen() {
     });
   }, []);
   const [savedRunId, setSavedRunId] = useState<string | null>(null);
-  // What this run took from other runners. UNCHANGED (brief §4: don't
-  // delete) but no longer RENDERED — the tile-claim summary below replaced
-  // it (see crossedTiles/crossedFrom). Still fetched and stored below (both
-  // call sites keep calling setSpoils) so Phase 3's overlap trigger has
-  // somewhere to land its answer for as long as it's still computing one;
-  // the getter itself is never read, hence the blank binding — an unused
-  // `spoils` name would otherwise be a lint error, not just dead weight.
-  const [, setSpoils] = useState<RunSpoils | null>(null);
   // Tile Coverage brief §6 step 5. `tileClaim` is null until claimTiles()
   // resolves (uploadRun does both in one call — see territory-sync.ts).
   // `tilesFailure` disambiguates "still waiting" (both null)
@@ -285,11 +275,6 @@ export default function TrackScreen() {
           setSavedRunId(resolved.runId);
           setQueuedId(null);
           clearCheckpoint();
-          // Best-effort, same as save()'s own success path — a failed read
-          // here just means no "you took territory" line, never a lost save.
-          void fetchRunSpoils(resolved.runId).then((taken) => {
-            if (!stale && taken.ok && taken.spoils.runsAffected > 0) setSpoils(taken.spoils);
-          });
           // NOT refreshing tileClaim/tilesFailure/tileTotal here — a
           // real, narrow gap, not an oversight. Unlike save()'s direct call,
           // uploadRun ran inside flushQueue (upload-queue.ts), whose
@@ -372,13 +357,23 @@ export default function TrackScreen() {
       // nominal radius: a fixed-radius bite out of every run's claimed area
       // draws a circle of known size around the home, and three runs fix
       // its centre — the attack privacy-zone.ts's jitter exists to defeat.
-      setSessionEnclosed(
-        dropCellsInsideZone(
-          enclosedCells(pathToTiles(tracker.points).cells, DEFAULT_TILE_RES),
-          getHomeZone()?.home ?? null,
-          result.cutM,
-        ),
-      );
+      // Guarded because everything after it in this effect — including the
+      // last-run debug snapshot — would be skipped if it threw. enclosedCells
+      // goes through h3's dissolve and polygon fill, which raise on
+      // degenerate input rather than returning empty. Losing the enclosure
+      // costs the runner the interior of one loop; losing the rest of this
+      // effect costs them the diagnostic that explains why.
+      try {
+        setSessionEnclosed(
+          dropCellsInsideZone(
+            enclosedCells(pathToTiles(tracker.points).cells, DEFAULT_TILE_RES),
+            getHomeZone()?.home ?? null,
+            result.cutM,
+          ),
+        );
+      } catch {
+        setSessionEnclosed([]);
+      }
       // Diagnostic escape hatch (last-run-debug.ts) — the RAW, pre-mask
       // points, so a suspicious area report can be re-run through
       // buildFence() against exactly what was recorded, not what got
@@ -432,7 +427,19 @@ export default function TrackScreen() {
         // shareable surface, so the unfiltered enclosure is what to show —
         // the same thing they will own, minus what gets dropped at upload.
         const live = pathToTiles(tracker.points).cells;
-        setLiveTiles([...live, ...enclosedCells(live, DEFAULT_TILE_RES)]);
+        // Guarded for the same reason the finished-run effect is, and more
+        // urgently: this runs every throttle tick for the whole length of a
+        // session, so an h3 failure on one odd shape would throw repeatedly
+        // mid-run. Falling back to the covered cells alone shows less than
+        // the runner owns, which is the safe direction — the claim itself is
+        // computed separately at save time.
+        let withEnclosure = live;
+        try {
+          withEnclosure = [...live, ...enclosedCells(live, DEFAULT_TILE_RES)];
+        } catch {
+          withEnclosure = live;
+        }
+        setLiveTiles(withEnclosure);
       }
     }, 0);
     return () => clearTimeout(id);
@@ -511,17 +518,9 @@ export default function TrackScreen() {
       // run reaches durable storage. It just did — leaving the checkpoint
       // behind would offer "Resume" on a run that's already saved.
       clearCheckpoint();
-      // Best-effort: a failed read here just means no "you took territory"
-      // line, never a failed save. The run is already banked. UNCHANGED
-      // (brief §4) but no longer rendered — see the crossedTiles banner
-      // below, which reads outcome.tiles instead.
-      const taken = await fetchRunSpoils(outcome.runId);
-      if (taken.ok && taken.spoils.runsAffected > 0) setSpoils(taken.spoils);
-
       // Tile Coverage brief §6 step 5. uploadRun already ran claimTiles as
       // part of THIS call (territory-sync.ts) — no second round trip needed
-      // for the claim itself, unlike fetchRunSpoils above (a genuinely
-      // separate read against a different table). `tiles: null` means the
+      // for the claim itself. `tiles: null` means the
       // run saved but the claim did not complete — see uploadRun's own doc
       // comment; surfaced with its reason, never silently as zero.
       if (outcome.tiles) {
@@ -616,10 +615,15 @@ export default function TrackScreen() {
     autoSavedRef.current = false;
     setSaveState('idle');
     setSavedRunId(null);
-    setSpoils(null);
     setMasked(null);
     setFence(null);
     setSessionTiles([]);
+    // Reset alongside sessionTiles, not left to be overwritten later. The
+    // finished-run effect does recompute it, so today nothing reads a stale
+    // value — but "it happens to be replaced before anyone looks" is not a
+    // guarantee, and this pair feeds both the summary map and the upload
+    // payload. They must be cleared together or not at all.
+    setSessionEnclosed([]);
     setTileClaim(null);
     setTilesFailure(null);
     setTileTotal(null);
@@ -736,11 +740,19 @@ export default function TrackScreen() {
             <View style={[styles.sessionEndStatsBar, { backgroundColor: 'rgba(20,20,20,0.65)' }]}>
               <Stat label={t('track.time')} value={formatDuration(tracker.elapsedS)} c={STATS_ON_DARK} />
               <Stat label={t('track.distance')} value={formatDistance(tracker.distanceM)} c={STATS_ON_DARK} />
-              {/* TILES replaces AREA (brief §6 step 5) — this run's covered
-                  cell count, computed locally (sessionTiles), so it's
-                  available the instant the run finishes rather than
-                  waiting on claimTiles()'s network round trip. */}
-              <Stat label={t('track.tiles')} value={String(sessionTiles.length)} c={STATS_ON_DARK} />
+              {/* TILES replaces AREA (brief §6 step 5), computed locally so
+                  it is there the instant the run finishes rather than
+                  waiting on claimTiles()'s round trip.
+                  COVERED + SURROUNDED, not covered alone. It was covered
+                  alone, which under-reported the run against everything
+                  around it: the map beside this number draws both, and the
+                  upload claims both. A headline that disagrees with the map
+                  it sits on top of reads as a bug in one of them. */}
+              <Stat
+                label={t('track.tiles')}
+                value={String(sessionTiles.length + sessionEnclosed.length)}
+                c={STATS_ON_DARK}
+              />
             </View>
             <RoundButton
               label={t('track.done')}

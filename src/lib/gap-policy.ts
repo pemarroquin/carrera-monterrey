@@ -54,9 +54,12 @@ export const MAX_BRIDGE_SPEED_MS = (25 * 1000) / 3600; // ≈ 6.94 m/s
  * speed cap) while their phone sat locked in a pocket the whole way.
  * Bridging a gap only knows how to draw a STRAIGHT LINE between the two
  * fixes, and the runner's real path followed streets the straight line can
- * cut through buildings, a river, or another runner's yard. Under
- * first-to-claim tile ownership that isn't merely generous — a wrongly
- * claimed tile is permanently taken from whoever actually ran it. For
+ * cut through buildings, a river, or another runner's yard. That was
+ * unrecoverable under first-to-claim, where a wrongly claimed tile was taken
+ * from the real runner PERMANENTLY. Under conquest it no longer is — they
+ * take it back by running there, which is exactly why the closure budget
+ * further down this file is safe to be generous with. The cap stays anyway:
+ * being temporarily wrong is still worse than leaving a hole. For
  * distance credit the stakes are lower (a scalar total, not ownership) but
  * the same cap is reused rather than inventing a second, looser one for
  * distance alone — see this module's header.

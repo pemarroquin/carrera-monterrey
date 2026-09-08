@@ -316,14 +316,6 @@ export const ROUTE_GRADIENT_FRAME_MS = 60;
 
 /** Trailing distance that stays a flat line before the route sets into wall. */
 export const FENCE_LAG_M = 100;
-/** Wall thickness on the ground, metres (web — the 3D extrusion gets its
- *  visual bulk from height, so the footprint stays thin). */
-export const FENCE_WALL_WIDTH_M = 3;
-/** Ribbon width on native, metres. The native fence is a FLAT filled ribbon
- *  (react-native-maps has no fill-extrusion), so without the 18m of wall
- *  height it needs a wider footprint to read as a fence at all — 3m is
- *  ~4px at the session zoom. */
-export const FENCE_RIBBON_WIDTH_M = 8;
 /** Wall height, metres. */
 export const FENCE_WALL_HEIGHT_M = 18;
 export const FENCE_WALL_OPACITY = 0.55;
