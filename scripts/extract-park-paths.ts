@@ -61,28 +61,48 @@ const RUNNABLE =
   '^(footway|path|pedestrian|track|cycleway|living_street|residential|steps|service)$';
 
 /**
+ * Public Overpass instances, tried in turn.
+ *
+ * More than one because the main instance WILL stop answering. Measured
+ * 2026-09-08: after a metro extraction it went from 429s and 504s to
+ * refusing connections entirely, while both mirrors stayed healthy.
+ * Rotating also spreads the load rather than leaning on one volunteer-run
+ * host, which is the polite way to use a free service.
+ */
+const MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
+
+/**
  * Overpass RATE LIMITS HARD. A plain loop over six municipios returned empty
  * bodies for most of them (measured 2026-09-08) — and an empty body parses
  * as a JSON error, not as "no parks", so a naive script would record zero
- * and look successful. Back off properly and treat a failure as fatal for
- * that municipio rather than as an empty result.
+ * and look successful. Back off properly, try every mirror, and treat a
+ * failure as fatal for that municipio rather than as an empty result.
  */
 async function overpass<T>(query: string, attempt = 0): Promise<T> {
-  try {
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: new URLSearchParams({ data: query }),
-      headers: { 'User-Agent': 'runners-races-mx park-path extraction' },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as T;
-  } catch (e) {
-    if (attempt >= 3) throw e;
-    const waitMs = 20_000 * (attempt + 1);
-    console.log(`    overpass failed (${e instanceof Error ? e.message : e}) — retrying in ${waitMs / 1000}s`);
-    await new Promise((r) => setTimeout(r, waitMs));
-    return overpass<T>(query, attempt + 1);
+  let lastError: unknown = new Error('no mirrors tried');
+  for (const url of MIRRORS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: new URLSearchParams({ data: query }),
+        headers: { 'User-Agent': 'runners-races-mx park-path extraction' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as T;
+    } catch (e) {
+      lastError = e;
+      console.log(`    ${new URL(url).host}: ${e instanceof Error ? e.message : e}`);
+    }
   }
+  if (attempt >= 2) throw lastError;
+  const waitMs = 30_000 * (attempt + 1);
+  console.log(`    every mirror failed — waiting ${waitMs / 1000}s before another pass`);
+  await new Promise((r) => setTimeout(r, waitMs));
+  return overpass<T>(query, attempt + 1);
 }
 
 
@@ -192,6 +212,8 @@ function wayCells(geometry: { lat: number; lon: number }[], res: number): string
   return [...cells];
 }
 
+const totalOf = (rs: { cells: string[] }[]) => rs.reduce((n, r) => n + r.cells.length, 0);
+
 interface MunicipioResult {
   municipio: string;
   parks: number;
@@ -209,33 +231,51 @@ async function extract(municipio: string): Promise<MunicipioResult> {
   const scope = `area["name"="${STATE}"]["admin_level"="4"]->.st;
 area["name"="${municipio}"]["admin_level"="6"](area.st)->.m;`;
 
+  // Park IDS first, and cheaply. Ways and relations are kept apart because
+  // Overpass addresses them separately (`way(id:…)` / `rel(id:…)`).
   const parkQuery = `[out:json][timeout:300];
 ${scope}
 (way(area.m)["leisure"="park"];relation(area.m)["leisure"="park"];);
-out tags;`;
-  const parks = await overpass<{ elements: { tags?: Record<string, string> }[] }>(parkQuery);
+out ids tags;`;
+  const parks = await overpass<{ elements: { type: string; id: number; tags?: Record<string, string> }[] }>(parkQuery);
   const namedParks = parks.elements.filter((e) => e.tags?.name).length;
+  const wayIds = parks.elements.filter((e) => e.type === 'way').map((e) => e.id);
+  const relIds = parks.elements.filter((e) => e.type === 'relation').map((e) => e.id);
 
-  await new Promise((r) => setTimeout(r, 5_000));
-
-  // map_to_area turns the park polygons themselves into a search area, so
-  // this picks up ways inside RELATIONS (multipolygon parks) too, not just
-  // simple closed ways.
-  const pathQuery = `[out:json][timeout:300];
-${scope}
-(way(area.m)["leisure"="park"];relation(area.m)["leisure"="park"];)->.parks;
-.parks map_to_area ->.pa;
-way(area.pa)["highway"~"${RUNNABLE}"];
-out geom;`;
-  const ways = await overpass<{ elements: OsmWay[] }>(pathQuery);
-
+  // CHUNKED, because map_to_area over every park at once times the server
+  // out. Measured 2026-09-08: Guadalupe (804 parks) returned HTTP 504 from
+  // BOTH mirrors, repeatedly — a gateway timeout on the query itself, not
+  // rate limiting, so retrying the same request could never have worked.
+  // 100 parks per request keeps each one small enough to answer.
+  const CHUNK = 100;
   const raw = new Set<string>();
   let metres = 0;
-  for (const w of ways.elements) {
-    if (!w.geometry || w.geometry.length < 2) continue;
-    for (let i = 1; i < w.geometry.length; i++) metres += segmentM(w.geometry[i - 1], w.geometry[i]);
-    for (const c of wayCells(w.geometry, DEFAULT_TILE_RES)) raw.add(c);
+
+  const chunks: string[] = [];
+  for (let i = 0; i < wayIds.length; i += CHUNK) {
+    chunks.push(`way(id:${wayIds.slice(i, i + CHUNK).join(',')})`);
   }
+  for (let i = 0; i < relIds.length; i += CHUNK) {
+    chunks.push(`rel(id:${relIds.slice(i, i + CHUNK).join(',')})`);
+  }
+
+  for (const [ci, selector] of chunks.entries()) {
+    await new Promise((r) => setTimeout(r, 4_000));
+    process.stdout.write(`    paths ${ci + 1}/${chunks.length}\r`);
+    // map_to_area over the park polygons picks up ways inside RELATION
+    // (multipolygon) parks too, which a plain way(area) query misses.
+    const ways = await overpass<{ elements: OsmWay[] }>(`[out:json][timeout:300];
+(${selector};)->.parks;
+.parks map_to_area ->.pa;
+way(area.pa)["highway"~"${RUNNABLE}"];
+out geom;`);
+    for (const w of ways.elements) {
+      if (!w.geometry || w.geometry.length < 2) continue;
+      for (let i = 1; i < w.geometry.length; i++) metres += segmentM(w.geometry[i - 1], w.geometry[i]);
+      for (const c of wayCells(w.geometry, DEFAULT_TILE_RES)) raw.add(c);
+    }
+  }
+  process.stdout.write('                    \r');
 
   await new Promise((r) => setTimeout(r, 5_000));
 
@@ -352,19 +392,58 @@ out tags;`,
   const seedPath = path.join(outDir, `${stamp}_park_paths.json`);
   writeFileSync(seedPath, JSON.stringify(seed));
 
-  const sqlPath = path.join(outDir, `${stamp}_park_paths.sql`);
-  const rows = results.flatMap((r) => r.cells.map((h3) => `  ('${r.municipio.replace(/'/g, "''")}', '${h3}')`));
+  // A real migration, not a gitignored blob. Unlike the tile conversion this
+  // is PUBLIC OSM reference data, not one person's location history, so it
+  // belongs in the repo where `supabase db push` can apply it — no 1.4 MB
+  // paste into a SQL editor.
+  const sqlPath = path.join(ROOT, 'supabase/migrations', `${stamp}_park_paths_data.sql`);
+  const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
+
+  const statRows = results
+    .map((r) => `  (${q(r.municipio)}, ${r.parks}, ${r.namedParks}, ${r.pathKm.toFixed(2)}, ${r.cells.length})`)
+    .join(',\n');
+  const cellRows = results
+    .flatMap((r) => r.cells.map((h3) => `  (${q(r.municipio)}, '${h3}')`))
+    .join(',\n');
+
   writeFileSync(
     sqlPath,
-    `-- Park-path denominator cells, generated ${new Date().toISOString()}.\n` +
-      `-- ${results.length} municipio(s), ${rows.length} cells.\n` +
-      `-- Needs a park_path_cells(municipio text, h3 text) table; see the backlog spec\n` +
-      `-- for why the DB path may beat a bundled seed (a bundled seed is ~120 KB per\n` +
-      `-- municipio, so all 51 of Nuevo León would be ~6 MB).\n\nbegin;\n` +
-      `insert into park_path_cells (municipio, h3) values\n${rows.join(',\n')}\non conflict do nothing;\n\ncommit;\n`,
+    `-- GENERATED by scripts/extract-park-paths.ts on ${new Date().toISOString()}.
+-- Regenerate with: npm run extract-park-paths -- --resume
+--
+-- The park-path denominator: ${results.length} municipio(s), ${totalOf(results)} cells,
+-- ${results.reduce((k, r) => k + r.pathKm, 0).toFixed(0)} km of runnable path inside parks.
+--
+-- Needs 20260908210000_park_paths.sql (the schema) applied first.
+--
+-- Cells are attributed to EXACTLY ONE municipio. Overpass returns ways that
+-- INTERSECT an area rather than ones inside it, so before clipping 18.7% of
+-- cells belonged to two or three municipios at once — the extraction script
+-- clips each cell to the boundary containing its centre.
+--
+-- Idempotent: re-running replaces the stats and adds no duplicate cells, so
+-- a refreshed extraction can be applied over an older one.
+
+begin;
+
+insert into park_path_stats (municipio, parks, named_parks, path_km, cells) values
+${statRows}
+on conflict (municipio) do update set
+  parks = excluded.parks,
+  named_parks = excluded.named_parks,
+  path_km = excluded.path_km,
+  cells = excluded.cells,
+  extracted_at = now();
+
+insert into park_path_cells (municipio, h3) values
+${cellRows}
+on conflict (municipio, h3) do nothing;
+
+commit;
+`,
   );
 
-  const totalCells = results.reduce((n, r) => n + r.cells.length, 0);
+  const totalCells = totalOf(results);
   console.log(`\n${results.length}/${targets.length} municipios in the output, ${totalCells} cells total`);
   if (results.length < targets.length) {
     console.log('  INCOMPLETE — rerun with --resume to pick up the rest once Overpass cools down.');
