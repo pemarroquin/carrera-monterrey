@@ -68,9 +68,19 @@ export const MAP_DEFAULT_ZOOM = 15;
 export const ROUTE_LINE_COLOR = '#E4572E';
 /** Same colour without '#', for Static Images URL overlays. */
 export const ROUTE_LINE_COLOR_URL = 'e4572e';
-export const ROUTE_LINE_WIDTH = 5;
+/**
+ * Halved 2026-09-08 (5 -> 2.5), Pedro's call: the gradient line read as too
+ * heavy on every surface that draws it. The glow below is halved with it so
+ * the proportion between line and halo is unchanged — the style is the same,
+ * just finer.
+ *
+ * ONE constant for every surface: the live edge (track-map), the run summary
+ * (fence-map) and saved territories (territories-map) all read it, which is
+ * what keeps a route looking like the same route wherever it appears.
+ */
+export const ROUTE_LINE_WIDTH = 2.5;
 /** Wider, blurred copy under the main line — reads as a glow on dark ground. */
-export const ROUTE_GLOW_WIDTH = 14;
+export const ROUTE_GLOW_WIDTH = 7;
 export const ROUTE_GLOW_BLUR = 3;
 export const ROUTE_GLOW_OPACITY = 0.35;
 
@@ -172,6 +182,30 @@ export const LIVE_FILL_PULSE_MS = 2600;
  * outline carries the shared iridescent gradient.
  */
 export const LIVE_FILL_OUTLINE_WIDTH = 2.5;
+
+/**
+ * Saved territories cycle their fill through the full ROUTE_GRADIENT hue
+ * wheel instead of sitting on one flat colour — Pedro's ask, 2026-09-08:
+ * "gradient vibrant and colourful like the Apple shimmer, with the smooth
+ * animation".
+ *
+ * Done in TIME rather than in space, and that is a real constraint rather
+ * than a shortcut: Mapbox GL has no positional gradient for fills. Only
+ * LINES take one (`line-gradient` over line-progress), which is why the
+ * territory OUTLINE already carries the spatial gradient — see
+ * LIVE_FILL_OUTLINE_WIDTH's comment. A fill can only be given a pattern
+ * image, which tiles visibly on an extrusion. So the fill sweeps the same
+ * wheel over time while the edge holds it across space, and together they
+ * read as one shimmering surface.
+ *
+ * The smoothness is the GPU's, not a render loop's:
+ * `fill-extrusion-color-transition` is set to this same duration, so GL
+ * interpolates between each pair of stops. Same technique as the live map's
+ * opacity breathe (LIVE_FILL_PULSE_MS), for the same reason — a rAF loop
+ * repainting a map layer 60 times a second is a battery cost mid-run.
+ */
+export const FENCE_SHIMMER_STEP_MS = 2200;
+
 
 /**
  * The route/territory gradient — a full 12-colour HUE WHEEL, in order, each
