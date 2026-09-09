@@ -24,6 +24,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
+import { routeFilesIn, staticRoutesFrom } from './web-routes.mjs';
+
 const DIST = path.resolve(process.argv[2] ?? 'dist');
 const INDEX = path.join(DIST, 'index.html');
 const RACES = path.resolve('assets/data/races.json');
@@ -92,8 +94,13 @@ writeFileSync(
   withMeta(shell, { title: APP_NAME, description: APP_DESCRIPTION, url: `${SITE_URL}/` }),
 );
 
-// 2. A generic fallback, for hosts that serve 404.html on a miss and for any
-//    client-side route this script doesn't enumerate (e.g. /settings).
+// 2. A generic fallback for hosts that serve 404.html on a miss.
+//
+//    Porkbun is NOT one of them, which this file used to claim it was. The
+//    file deploys and /404.html returns 200, but a missing route still gets
+//    openresty's own default error page — measured 2026-09-09, see
+//    web-routes.mjs. So this is a courtesy for other hosts, never the
+//    mechanism deep links rely on. Step 4 is that mechanism.
 writeFileSync(
   path.join(DIST, '404.html'),
   withMeta(shell, { title: APP_NAME, description: APP_DESCRIPTION, url: `${SITE_URL}/` }),
@@ -117,4 +124,32 @@ for (const race of races) {
   written += 1;
 }
 
-console.log(`finalize-web: meta on index.html + 404.html, ${written} race routes`);
+// 4. One real file per STATIC route, derived from the router's own directory.
+//
+//    This is what makes a hard reload work anywhere but the root. Until
+//    2026-09-09 only race routes had files, so /races, /leaderboard and every
+//    /settings/* page returned openresty's 404 on reload — reported as "it
+//    happens often that whenever i try to reload the page in any mobile
+//    browser in my cell i get a 404 Not Found error saying openresty".
+//
+//    Derived, never hand-listed: a hand-kept list is exactly how this bug
+//    existed: races were enumerated and screens were not, so adding a screen
+//    silently added a URL that 404s on reload. Nothing here needs touching
+//    when a screen is added.
+const routes = staticRoutesFrom(routeFilesIn(path.resolve('src/app')));
+for (const route of routes) {
+  const dir = path.join(DIST, route);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'index.html'),
+    withMeta(shell, {
+      title: APP_NAME,
+      description: APP_DESCRIPTION,
+      url: `${SITE_URL}/${route}`,
+    }),
+  );
+}
+
+console.log(
+  `finalize-web: meta on index.html + 404.html, ${routes.length} static routes, ${written} race routes`,
+);
