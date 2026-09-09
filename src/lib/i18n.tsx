@@ -49,6 +49,12 @@ const translations = {
       myRaces: 'Guardadas',
       settings: 'Perfil',
     },
+    // Web only, and only on a phone held sideways — see portrait-gate.web.tsx.
+    orientation: {
+      title: 'Gira el teléfono',
+      body: 'La app está hecha para vertical. Ponlo derecho y seguimos donde estabas.',
+      running: 'Tu sesión sigue grabando.',
+    },
     track: {
       newSession: 'Nueva sesión',
       pause: 'Pausar',
@@ -630,6 +636,12 @@ const translations = {
       feed: 'Races',
       myRaces: 'Saved',
       settings: 'Profile',
+    },
+    // See the ES entry's comment.
+    orientation: {
+      title: 'Turn your phone',
+      body: 'This app is built for portrait. Hold it upright and you pick up where you were.',
+      running: 'Your session is still recording.',
     },
     track: {
       newSession: 'New session',
