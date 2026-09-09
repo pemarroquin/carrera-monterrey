@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pmarroquin.com</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #000; color: #fff; min-height: 100dvh;
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .wrap { width: 100%; max-width: 460px; }
+    h1 { font-size: 28px; font-weight: 800; letter-spacing: 0.3px; }
+    .sub { color: #b0b4ba; margin-top: 6px; font-size: 15px; }
+    .bar { height: 4px; width: 64px; background: #E4572E; border-radius: 2px; margin: 14px 0 28px; }
+    a.card {
+      display: flex; align-items: center; justify-content: space-between;
+      text-decoration: none; color: #fff; background: #141414;
+      border: 1px solid #222; border-radius: 14px; padding: 18px 20px;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+    a.card:hover { transform: translateY(-2px); border-color: #E4572E; background: #191919; }
+    .card .t { font-size: 17px; font-weight: 600; }
+    .card .d { font-size: 13px; color: #b0b4ba; margin-top: 2px; }
+    .card .arrow { color: #E4572E; font-size: 20px; }
+    @media (prefers-reduced-motion: reduce) { a.card { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Pedro Marroquín</h1>
+    <p class="sub">Projects &amp; experiments</p>
+    <div class="bar"></div>
+    <a class="card" href="https://runningapp.pmarroquin.com/">
+      <span>
+        <span class="t">Runners' Races MX</span>
+        <span class="d">Race discovery for Mexico — web preview</span>
+      </span>
+      <span class="arrow">→</span>
+    </a>
+  </main>
+</body>
+</html>
