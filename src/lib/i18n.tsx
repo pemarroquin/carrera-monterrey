@@ -458,7 +458,11 @@ const translations = {
         'Sin este permiso no podemos trazar tus recorridos ni conquistar territorio.',
       locationEnable: 'Activar ubicación',
       locationOpenSettings: 'Abrir ajustes del teléfono',
-      locationBrowserBlocked: 'Desbloquea la ubicación en tu navegador',
+      // Sustituye a locationBrowserBlocked, que era la etiqueta de un botón
+      // que no podía funcionar: ningún navegador vuelve a abrir un permiso
+      // que ya bloqueaste. Es una instrucción, no un control.
+      locationBrowserBlockedHint:
+        'Tu navegador bloquea la ubicación en este sitio y solo tu navegador puede desbloquearla. Abre los ajustes del sitio, junto a la barra de direcciones, y permite Ubicación. Esta pantalla se actualiza sola.',
       reminders: 'Recordatorios',
       remindersHint:
         'Te avisamos 3 días antes y la noche anterior de cada carrera que guardes.',
@@ -948,7 +952,11 @@ const translations = {
         "Without this permission we can't trace your runs or capture territory.",
       locationEnable: 'Enable location',
       locationOpenSettings: 'Open phone settings',
-      locationBrowserBlocked: 'Unblock location in your browser',
+      // Replaces locationBrowserBlocked, which was the label on a button
+      // that could not work: no browser will re-open a permission you have
+      // already blocked. This is an instruction, not a control.
+      locationBrowserBlockedHint:
+        'Your browser is blocking location for this site, and only your browser can undo it. Open the site settings next to the address bar and allow Location. This screen updates on its own.',
       reminders: 'Reminders',
       remindersHint:
         'We’ll remind you 3 days before and the night before each race you save.',

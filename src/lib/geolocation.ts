@@ -101,3 +101,34 @@ export async function watch(
     return { remove: () => {} };
   }
 }
+
+/**
+ * The native half of geolocation.web.ts's permission-state read — see that
+ * file for what the four states mean and why the web needed them.
+ *
+ * Native maps cleanly onto expo-location's own answer, which (unlike its web
+ * shim) reports `canAskAgain` truthfully: false means the OS has settled the
+ * question and only the settings app can reopen it.
+ */
+export type GeoPermissionState = 'granted' | 'askable' | 'blocked' | 'unknown';
+
+export async function getPermissionState(): Promise<GeoPermissionState> {
+  try {
+    const res = await Location.getForegroundPermissionsAsync();
+    if (res.granted) return 'granted';
+    return res.canAskAgain ? 'askable' : 'blocked';
+  } catch {
+    // No provider on this device — the same 'unknown' the web returns when
+    // navigator.geolocation is missing, rather than a claim of "denied".
+    return 'unknown';
+  }
+}
+
+/**
+ * No-op on native: there is no OS callback for "the runner changed this in
+ * the settings app". The screen re-reads on focus instead, which is the
+ * moment they come back from it — see location.tsx's effect.
+ */
+export function onPermissionStateChange(_listener: (state: GeoPermissionState) => void): () => void {
+  return () => {};
+}

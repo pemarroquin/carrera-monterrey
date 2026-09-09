@@ -13,6 +13,12 @@ import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import { Hint, SettingRow, SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
 import { Spacing, type ThemeColor } from '@/constants/theme';
+import {
+  getPermissionState,
+  onPermissionStateChange,
+  requestPermission,
+  type GeoPermissionState,
+} from '@/lib/geolocation';
 import { clearHomeZone, getHomeZone, setHomeZone } from '@/lib/home-point';
 import { useI18n } from '@/lib/i18n';
 import type { PrivacyZone } from '@/lib/privacy-zone';
@@ -26,54 +32,75 @@ export default function LocationSettingsScreen() {
   // permission looks identical to weak GPS once a session is running,
   // which is exactly how a whole recording session can be lost.
   const isFocused = useIsFocused();
-  const [locPerm, setLocPerm] = useState<Location.PermissionResponse | null>(null);
+  const [locPerm, setLocPerm] = useState<GeoPermissionState | null>(null);
   const [locBusy, setLocBusy] = useState(false);
 
-  // Re-read on every focus, not once on mount: the fix for a denied
-  // permission is to change it in the OS settings app and come back, and a
-  // mount-only check would still show the stale "denied" after that.
+  // Read through the app's OWN geolocation layer, not expo-location.
+  //
+  // This screen used to call Location.getForegroundPermissionsAsync /
+  // requestForegroundPermissionsAsync directly, and on web that made the
+  // "Enable location" button do nothing at all, silently. The shim
+  // (node_modules/expo-location/build/ExpoLocation.web.js) hard-codes
+  // `canAskAgain: true` in EVERY branch — including the denied one — so the
+  // button always offered to ask, while its request path saw a 'denied'
+  // browser state and returned DENIED without ever calling
+  // getCurrentPosition. No prompt, no error, no change on screen.
+  //
+  // Same class of defect, and the same fix, as the watch path this app
+  // already bypasses: read the browser, don't trust the shim. See
+  // geolocation.web.ts.
+  const readPermission = useCallback(() => {
+    getPermissionState()
+      .then(setLocPerm)
+      .catch(() => {
+        // Leave whatever is there; the row still reads honestly.
+      });
+  }, []);
+
+  // Re-read on every focus, not once on mount: on native the fix for a
+  // blocked permission is the OS settings app, and coming back here is the
+  // moment to re-check.
   useEffect(() => {
     if (!isFocused) return;
     let stale = false;
     const id = setTimeout(() => {
-      Location.getForegroundPermissionsAsync()
-        .then((res) => {
-          if (!stale) setLocPerm(res);
-        })
-        .catch(() => {
-          // Provider missing entirely (some web browsers) — leave it null
-          // and render the unknown state rather than claiming "denied".
-        });
+      if (!stale) readPermission();
     }, 0);
     return () => {
       stale = true;
       clearTimeout(id);
     };
-  }, [isFocused]);
+  }, [isFocused, readPermission]);
+
+  // On web the unblock happens in the BROWSER's site settings, with this page
+  // still open behind it — no focus change, no reload. Without this the
+  // screen would go on saying "Blocked" after the runner had just fixed it,
+  // making the instructions look like they had failed. No-op on native.
+  useEffect(() => onPermissionStateChange(setLocPerm), []);
 
   const onFixLocation = useCallback(async () => {
-    // Once the OS has permanently denied, asking again silently no-ops —
-    // the only real fix is the system settings app, so send them there
-    // instead of showing a button that appears to do nothing.
+    // Blocked means the prompt is gone for good: the OS has settled it, or
+    // the browser has. On native the settings app is the way back.
     // react-native-web's Linking shim has NO openSettings — calling it
     // throws a TypeError inside an async handler with nobody to catch it,
-    // and tsc can't see that because the react-native types declare it.
-    // On web the runner unblocks the site in the browser's own UI, so the
-    // honest move is to say that rather than to fake a button.
-    if (locPerm && !locPerm.canAskAgain && Platform.OS !== 'web') {
-      Linking.openSettings().catch(() => {});
+    // and tsc can't see that because the react-native types declare it. On
+    // web there is nothing to open, so the button is not rendered at all and
+    // the hint carries the instructions instead.
+    if (locPerm === 'blocked') {
+      if (Platform.OS !== 'web') Linking.openSettings().catch(() => {});
       return;
     }
     setLocBusy(true);
     try {
-      const res = await Location.requestForegroundPermissionsAsync();
-      setLocPerm(res);
-    } catch {
-      // Leave the previous state; the row still reads honestly.
+      // The real prompt. On web this reaches navigator.geolocation directly,
+      // which is what actually re-opens the dialog after a DISMISSED prompt
+      // — the case this button exists for.
+      await requestPermission();
+      readPermission();
     } finally {
       setLocBusy(false);
     }
-  }, [locPerm]);
+  }, [locPerm, readPermission]);
 
   // Privacy zone state. Read synchronously from local prefs (same store as
   // theme/locale), so there is no loading flash.
@@ -144,18 +171,17 @@ export default function LocationSettingsScreen() {
       <View style={settingsStyles.block}>
         <SettingRow label={t('settings.location')} c={c}>
           <Status
-            on={locPerm?.granted === true}
-            // Null is NOT "off". The provider can be missing entirely (some
-            // browsers) and the permission is then genuinely unknown —
-            // painting that the same red as a blocked permission claims a
-            // problem nobody has verified.
-            unknown={locPerm === null}
+            on={locPerm === 'granted'}
+            // Not-yet-read and no-provider are NOT "off". Painting either the
+            // same red as a blocked permission claims a problem nobody has
+            // verified.
+            unknown={locPerm === null || locPerm === 'unknown'}
             label={
-              locPerm === null
+              locPerm === null || locPerm === 'unknown'
                 ? t('settings.locationUnknown')
-                : locPerm.granted
+                : locPerm === 'granted'
                   ? t('settings.locationOn')
-                  : locPerm.canAskAgain
+                  : locPerm === 'askable'
                     ? t('settings.locationNotSet')
                     : t('settings.locationOff')
             }
@@ -163,15 +189,21 @@ export default function LocationSettingsScreen() {
           />
         </SettingRow>
         <Hint c={c}>
-          {locPerm?.granted ? t('settings.locationOnHint') : t('settings.locationOffHint')}
+          {locPerm === 'granted'
+            ? t('settings.locationOnHint')
+            : locPerm === 'blocked' && Platform.OS === 'web'
+              ? // The one case with no button: a browser will not re-open a
+                // prompt it has been told to stop showing, so the hint has
+                // to carry the actual gesture instead of a control that
+                // cannot work.
+                t('settings.locationBrowserBlockedHint')
+              : t('settings.locationOffHint')}
         </Hint>
-        {locPerm !== null && !locPerm.granted && (
+        {locPerm !== null && locPerm !== 'granted' && !(locPerm === 'blocked' && Platform.OS === 'web') && (
           <RowAction onPress={onFixLocation} busy={locBusy} c={c}>
-            {locPerm.canAskAgain
-              ? t('settings.locationEnable')
-              : Platform.OS === 'web'
-                ? t('settings.locationBrowserBlocked')
-                : t('settings.locationOpenSettings')}
+            {locPerm === 'blocked'
+              ? t('settings.locationOpenSettings')
+              : t('settings.locationEnable')}
           </RowAction>
         )}
       </View>

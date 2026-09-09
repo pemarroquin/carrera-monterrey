@@ -213,3 +213,79 @@ export async function watch(
     },
   };
 }
+
+/**
+ * What the settings screen needs to know: can the permission prompt still be
+ * shown, or is the only way through the browser's own UI?
+ *
+ * `GeoPermission` above cannot answer that — it collapses "the runner
+ * dismissed the prompt" and "the runner pressed Block" into 'denied', and
+ * they need opposite things from the interface. One is a button. The other
+ * is instructions, because no amount of calling getCurrentPosition will
+ * re-open a prompt the browser has decided against.
+ *
+ *  granted  — has it.
+ *  askable  — a call to requestPermission() will show the browser's prompt.
+ *  blocked  — it will NOT. Only the site settings can undo this.
+ *  unknown  — no geolocation provider at all.
+ *
+ * Read-only ON PURPOSE: it must never call getCurrentPosition, because that
+ * IS the prompt. A screen that probed to render its own status would raise
+ * the dialog every time it was opened.
+ */
+export type GeoPermissionState = 'granted' | 'askable' | 'blocked' | 'unknown';
+
+export async function getPermissionState(): Promise<GeoPermissionState> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return 'unknown';
+  if (!navigator.permissions?.query) {
+    // No Permissions API: geolocation still works, we simply cannot read its
+    // state without prompting. 'askable' is the honest answer — trying is
+    // exactly what is available — and the prompt is a no-op if it is already
+    // granted.
+    return 'askable';
+  }
+  try {
+    const status = await navigator.permissions.query({ name: 'geolocation' });
+    return status.state === 'granted' ? 'granted' : status.state === 'denied' ? 'blocked' : 'askable';
+  } catch {
+    // Permissions API present but this query unsupported (older Safari).
+    return 'askable';
+  }
+}
+
+/**
+ * Fires when the browser's geolocation permission changes — including from
+ * the browser's OWN site-settings UI, which is the only place a blocked
+ * permission can be undone.
+ *
+ * That is the whole reason this exists. Unblocking happens outside the page,
+ * so without it the screen would keep saying "Blocked" after the runner has
+ * just fixed it, and the instructions telling them to fix it would appear to
+ * have failed. The `change` event is on the PermissionStatus object itself,
+ * so it needs the query kept alive rather than re-run.
+ *
+ * Returns an unsubscribe. Never throws: on a browser without the Permissions
+ * API there is nothing to listen to, and the screen's own re-read on focus
+ * remains the fallback.
+ */
+export function onPermissionStateChange(listener: (state: GeoPermissionState) => void): () => void {
+  if (typeof navigator === 'undefined' || !navigator.permissions?.query) return () => {};
+  let status: PermissionStatus | null = null;
+  let cancelled = false;
+  const handle = () => {
+    if (!status || cancelled) return;
+    listener(status.state === 'granted' ? 'granted' : status.state === 'denied' ? 'blocked' : 'askable');
+  };
+  navigator.permissions
+    .query({ name: 'geolocation' })
+    .then((result) => {
+      if (cancelled) return;
+      status = result;
+      result.addEventListener('change', handle);
+    })
+    .catch(() => {});
+  return () => {
+    cancelled = true;
+    status?.removeEventListener('change', handle);
+  };
+}
