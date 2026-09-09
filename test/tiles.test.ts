@@ -7,6 +7,7 @@
 // different clothes — a background-gap jump used to be bridged exactly
 // like a normal throttle gap, silently claiming ground never run over.
 import {
+  cellArea,
   cellsToMultiPolygon,
   getResolution,
   gridDisk,
@@ -14,6 +15,7 @@ import {
   gridPathCells,
   latLngToCell,
   polygonToCells,
+  UNITS,
 } from 'h3-js';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +27,7 @@ import {
   pathToTiles,
   tileResLikePattern,
   type TilePoint,
+  tilesAreaM2,
 } from '@/lib/tiles';
 import { TILE_DISSOLVE_THRESHOLD } from '@/constants/map';
 
@@ -414,5 +417,38 @@ describe('TILE_DISSOLVE_THRESHOLD', () => {
     const dissolved = cellsToMultiPolygon(cells, true);
     const refilled = new Set(dissolved.flatMap((rings) => polygonToCells(rings, DEFAULT_TILE_RES, true)));
     expect(refilled).toEqual(new Set(cells));
+  });
+});
+
+// tilesAreaM2 — the caption under a map of these same cells. It replaced
+// runs.area_m2 (the FENCE polygon's area) on the Saved tab, because the two
+// can disagree by orders of magnitude: run e058a4c9 stores 1 155 m² of fence
+// against 204 covered tiles, having never closed a loop.
+describe('tilesAreaM2', () => {
+  const CELL = latLngToCell(25.6866, -100.3161, DEFAULT_TILE_RES);
+
+  it('is zero for no tiles', () => {
+    expect(tilesAreaM2([])).toBe(0);
+  });
+
+  it('grows with the number of tiles', () => {
+    const ring = gridDisk(CELL, 1);
+    expect(tilesAreaM2(ring)).toBeGreaterThan(tilesAreaM2([CELL]));
+  });
+
+  it('sums each cell rather than multiplying one by the count', () => {
+    // H3 cells are not equal area, so the true sum differs from count x
+    // first-cell area. Asserting they are NOT identical pins the choice —
+    // a "simplification" to n * cellArea(cells[0]) fails here.
+    const disk = gridDisk(CELL, 4);
+    const summed = tilesAreaM2(disk);
+    const approximated = disk.length * cellArea(disk[0], UNITS.m2);
+    expect(summed).not.toBe(approximated);
+    expect(summed).toBeCloseTo(approximated, -2);
+  });
+
+  it('reports a res-12 tile at roughly 300 m2', () => {
+    expect(tilesAreaM2([CELL])).toBeGreaterThan(250);
+    expect(tilesAreaM2([CELL])).toBeLessThan(400);
   });
 });

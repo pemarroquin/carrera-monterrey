@@ -24,13 +24,16 @@ import { cellsToMultiPolygon } from 'h3-js';
 import type { MultiPolygon } from 'geojson';
 
 import { SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
-import { enclosedCells, noiseHoles } from '@/lib/enclosure';
+import { groundOfRun, noiseHoles } from '@/lib/enclosure';
 import { DEFAULT_TILE_RES } from '@/lib/tiles';
 import { TerritoriesMap, type TerritoryFeature } from '@/components/territories-map';
 import { useI18n } from '@/lib/i18n';
-import { fetchMyVisitedCells } from '@/lib/territory-sync';
+import { fetchMyVisitedCells, type RunCells } from '@/lib/territory-sync';
 
-type State = { status: 'loading' } | { status: 'error' } | { status: 'ready'; runs: string[][] };
+type State =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; runs: RunCells[] };
 
 export default function HistoryScreen() {
   const { c } = useSettingsColors();
@@ -105,7 +108,9 @@ export default function HistoryScreen() {
   // loop the mask removed. The trade is that a loop closed only by its
   // masked-off ends does not enclose here even though it did at claim time
   // — the safe direction to be wrong in.
-  const ground = [...new Set(state.runs.flatMap((run) => [...run, ...enclosedCells(run, DEFAULT_TILE_RES)]))];
+  const ground = [
+    ...new Set(state.runs.flatMap(({ cells }) => groundOfRun(cells, DEFAULT_TILE_RES))),
+  ];
 
   // Sampling holes are filled after that, at enclosure.ts's measured cap.
   // Still needed: a session that never closed its loop encloses nothing, so

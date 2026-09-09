@@ -7,7 +7,7 @@
 // h3-js v4 API (verified against the installed package, not assumed from
 // memory — v3 used different names: geoToH3, h3Line): latLngToCell,
 // gridPathCells, cellToBoundary, cellToParent.
-import { getResolution, gridPathCells, latLngToCell } from 'h3-js';
+import { cellArea, getResolution, gridPathCells, latLngToCell, UNITS } from 'h3-js';
 
 import { planGapClosures } from '@/lib/gap-policy';
 import type { LatLng } from '@/lib/territory';
@@ -212,4 +212,25 @@ export function pathToTiles(path: TilePoint[], res: number = DEFAULT_TILE_RES): 
     bridgesSkippedSpeed,
     bridgesSkippedDistance,
   };
+}
+
+/**
+ * Total ground a set of tiles covers, in m².
+ *
+ * Summed per cell rather than `count × oneCellArea`: H3 cells are not equal
+ * area — they vary by a few percent with latitude and with proximity to a
+ * pentagon — and this number is shown to the runner beside a map of the
+ * exact same cells.
+ *
+ * Exists because the Saved tab used to print `runs.area_m2`, the area of the
+ * FENCE POLYGON, next to that map. Measured 2026-09-09, one real 5.8 km run
+ * (`e058a4c9`) had a fence area of 1 155 m² against 204 covered tiles —
+ * roughly 74 000 m² — because the run never closed a loop and there was
+ * almost nothing for buildFence to enclose. A caption from one source beside
+ * a shape from another is how a screen ends up arguing with itself.
+ */
+export function tilesAreaM2(cells: string[]): number {
+  let total = 0;
+  for (const cell of cells) total += cellArea(cell, UNITS.m2);
+  return total;
 }

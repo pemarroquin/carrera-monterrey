@@ -98,8 +98,11 @@ describe('groupVisitsByRun', () => {
       { h3: C, run_id: 'r1' },
     ]);
     expect(runs).toHaveLength(2);
-    expect(runs.map((r) => [...r].sort())).toEqual(
-      expect.arrayContaining([[A, C].sort(), [B]]),
+    expect(runs.map((r) => ({ runId: r.runId, cells: [...r.cells].sort() }))).toEqual(
+      expect.arrayContaining([
+        { runId: 'r1', cells: [A, C].sort() },
+        { runId: 'r2', cells: [B] },
+      ]),
     );
   });
 
@@ -107,7 +110,7 @@ describe('groupVisitsByRun', () => {
     expect(groupVisitsByRun([
       { h3: A, run_id: 'r1' },
       { h3: A, run_id: 'r1' },
-    ])).toEqual([[A]]);
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
   });
 
   it('keeps a cell separately per run, because each run encloses on its own', () => {
@@ -115,21 +118,24 @@ describe('groupVisitsByRun', () => {
       { h3: A, run_id: 'r1' },
       { h3: A, run_id: 'r2' },
     ]);
-    expect(runs).toEqual([[A], [A]]);
+    expect(runs).toEqual([
+      { runId: 'r1', cells: [A] },
+      { runId: 'r2', cells: [A] },
+    ]);
   });
 
   it('drops cells at the old resolution instead of mixing two grids', () => {
     expect(groupVisitsByRun([
       { h3: A, run_id: 'r1' },
       { h3: OLD, run_id: 'r1' },
-    ])).toEqual([[A]]);
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
   });
 
   it('omits a run entirely when every one of its cells was the old resolution', () => {
     expect(groupVisitsByRun([
       { h3: A, run_id: 'r1' },
       { h3: OLD, run_id: 'r2' },
-    ])).toEqual([[A]]);
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
   });
 
   it('returns no runs for no rows, rather than one empty run', () => {

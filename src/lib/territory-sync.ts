@@ -969,8 +969,16 @@ export async function updateDisplayName(name: string): Promise<ProfileOutcome> {
 }
 
 export type VisitedOutcome =
-  | { ok: true; runs: string[][] }
+  | { ok: true; runs: RunCells[] }
   | { ok: false; reason: 'disabled' | 'auth' | 'network' };
+
+/** One run's covered cells, keyed so a caller that draws PER RUN (the Saved
+ *  tab) can find them, and ignorable by one that only wants the union (the
+ *  history map). */
+export interface RunCells {
+  runId: string;
+  cells: string[];
+}
 
 /** One `tile_visits` row as this screen reads it. */
 export interface VisitRow {
@@ -979,8 +987,8 @@ export interface VisitRow {
 }
 
 /**
- * Visit rows → one cell array per run, deduplicated and filtered to the
- * current tile resolution.
+ * Visit rows → one entry per run (its id and its cells), deduplicated and
+ * filtered to the current tile resolution.
  *
  * Pure and exported so it can be tested directly. The alternative was
  * mocking the whole PostgREST query builder to reach three lines of
@@ -1002,7 +1010,7 @@ export interface VisitRow {
  * later run over the same street writes it again. Across runs the repeat is
  * meaningful (each run encloses on its own); within one it is noise.
  */
-export function groupVisitsByRun(rows: VisitRow[]): string[][] {
+export function groupVisitsByRun(rows: VisitRow[]): RunCells[] {
   const byRun = new Map<string, Set<string>>();
   for (const row of rows) {
     if (!isCurrentTileRes(row.h3)) continue;
@@ -1015,7 +1023,7 @@ export function groupVisitsByRun(rows: VisitRow[]): string[][] {
   }
   // A run whose every cell was filtered out leaves no entry at all, rather
   // than an empty array the caller would have to skip.
-  return [...byRun.values()].map((set) => [...set]);
+  return [...byRun].map(([runId, set]) => ({ runId, cells: [...set] }));
 }
 
 /**
@@ -1052,7 +1060,7 @@ export function groupVisitsByRun(rows: VisitRow[]): string[][] {
  * — a wrong answer that looks like a complete one.
  */
 export async function fetchMyVisitedCells(): Promise<VisitedOutcome> {
-  return withSession<{ runs: string[][] }>(async (session) => {
+  return withSession<{ runs: RunCells[] }>(async (session) => {
     const PAGE = 1000;
     const rows: VisitRow[] = [];
 

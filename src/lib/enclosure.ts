@@ -198,3 +198,37 @@ export function noiseHoles(
     .filter((hole) => hole.length <= maxCells)
     .flat();
 }
+
+/**
+ * The ground ONE run took: every cell it crossed, plus the interior of any
+ * loop it closed.
+ *
+ * The single place that rule is written. Two surfaces draw a run's ground —
+ * the Saved tab, per run, and "Where you've run", unioned across a whole
+ * history — and they must not each assemble it themselves. That is not a
+ * style preference: `holesOf` exists because the dissolve pipeline had been
+ * written out three times and a measurement script had drifted from the
+ * shipped code (commit ef92d38), and gap-policy.ts exists because the
+ * recorder and the tile builder each applied the caps and disagreed about a
+ * real gap.
+ *
+ * PER RUN is the whole point. Enclosing the union of a runner's history
+ * instead would let someone run a city's perimeter over six months and claim
+ * everything inside — see this file's header.
+ *
+ * The claim path does not call this, deliberately: it computes enclosure
+ * from the UNMASKED path and zone-filters afterwards (see
+ * dropCellsInsideZone), which cannot be done from stored cells that were
+ * already trimmed. Callers here work from what was stored, so they get a
+ * subset near home and never a leak.
+ */
+export function groundOfRun(cells: string[], res: number): string[] {
+  // Deduplicated BEFORE the dissolve, not only after. cellsToMultiPolygon
+  // throws "Duplicate input" rather than degrading, and an exception here
+  // unmounts the screen. Every caller today passes a set already
+  // (groupVisitsByRun dedupes per run; pathToTiles accumulates into a Set),
+  // so this guards the next one — an out-and-back crosses the same cell
+  // twice and a raw list of crossings is the obvious thing to hand it.
+  const own = [...new Set(cells)];
+  return [...new Set([...own, ...enclosedCells(own, res)])];
+}
