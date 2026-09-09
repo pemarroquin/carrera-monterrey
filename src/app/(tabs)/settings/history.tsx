@@ -10,9 +10,14 @@
 // interior of any loop a single session closed. Purely informative — nothing
 // on this screen is scored, ranked or claimable.
 //
-// It is also where a run that could not claim territory still shows up: a
-// session uploaded past the claim window saves normally and appears on this
-// map, just not on the board. See claim_run_tiles' window.
+// A run that could NOT claim does not appear here at all, and the comment
+// this replaces claimed the opposite. claim_run_tiles raises CLAIM_TOO_OLD
+// (and CLAIM_IMPLAUSIBLE) BEFORE its `insert into tile_visits`, so such a
+// run writes no visit rows and this map has nothing to draw for it — while
+// the runs row, and so the Saved tab's fence, is written either way. No run
+// in production is in that state today (12 of 12 have tiles, checked
+// 2026-09-09), which is exactly why the wrong comment survived: nothing
+// contradicted it.
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { cellsToMultiPolygon } from 'h3-js';
