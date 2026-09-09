@@ -76,7 +76,8 @@
     "convert-tile-res": "vite-node --config vitest.config.ts scripts/convert-tile-res.ts",
     "verify-claims": "vite-node --config vitest.config.ts scripts/verify-claims.ts",
     "measure-holes": "vite-node --config vitest.config.ts scripts/measure-holes.ts",
-    "extract-park-paths": "vite-node --config vitest.config.ts scripts/extract-park-paths.ts"
+    "extract-park-paths": "vite-node --config vitest.config.ts scripts/extract-park-paths.ts",
+    "verify-rls": "node scripts/verify-rls.mjs"
   },
   "private": true
 }
