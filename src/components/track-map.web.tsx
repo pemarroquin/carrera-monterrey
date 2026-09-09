@@ -280,14 +280,23 @@ export function TrackMap({
   // the same "always current, no stale closure" treatment.
   const pointsRef = useRef<LatLng[]>([]);
   const autoReturnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True from the moment a user gesture arms auto-return until that timer
-  // actually fires (or is cancelled by a mode toggle / new session). Overview
-  // mode's whole point is to let the runner step back and read the shape of
-  // what they've covered — the per-fix re-fit effect below checks this and
-  // stays hands-off while it's true, so a deliberate pan/zoom survives until
-  // AUTO_RETURN_IDLE_MS, not just until the next GPS fix (~1s). Follow mode
-  // is unaffected: it's meant to stay glued to the runner, fix to fix.
-  const overviewManualPendingRef = useRef(false);
+  // True from the moment a user gesture arms auto-return until the camera is
+  // next placed authoritatively (the timer firing, a mode toggle, a recenter
+  // tap, a new session). While it's true the per-fix camera effect below
+  // stays hands-off, so a deliberate pan/pinch survives for the whole
+  // AUTO_RETURN_IDLE_MS window instead of being undone by the next GPS fix.
+  //
+  // It applies in BOTH modes, and that is the fix for "it's almost as if it
+  // doesn't allow you to explore the map" (Pedro, 2026-09-08). It used to be
+  // checked only when cameraMode was 'overview' — so in follow mode, which
+  // is what every session STARTS in, the per-fix effect re-centred on the
+  // runner ~1-2s after a pan and AUTO_RETURN_IDLE_MS never came into it at
+  // all. Panning away in follow mode was effectively impossible.
+  //
+  // Follow mode still stays glued fix to fix; nothing sets this ref unless
+  // the runner actually touches the map (dragend/zoomend with a real
+  // originalEvent — see the auto-return effect below).
+  const manualPendingRef = useRef(false);
 
   // P4: cameraMode replaces the old cameraOffTarget visibility flag
   // entirely. The control is now ALWAYS rendered while a session is active
@@ -323,10 +332,17 @@ export function TrackMap({
   const applyCameraForMode = useCallback((durationMs: number) => {
     const map = mapRef.current;
     if (!map) return;
+    // Every caller here is an authoritative "the camera belongs at the
+    // current mode's target NOW" — the idle timer firing, a mode toggle, a
+    // recenter tap. So both halves of the browse hold are released in ONE
+    // place: the pending timer and the ref the per-fix effect reads. Leaving
+    // the ref set here is what would strand that effect hands-off forever
+    // (its timer having been cleared, nothing left to reset the ref).
     if (autoReturnTimerRef.current) {
       clearTimeout(autoReturnTimerRef.current);
       autoReturnTimerRef.current = null;
     }
+    manualPendingRef.current = false;
 
     if (cameraModeRef.current === 'overview') {
       const head = headRef.current;
@@ -379,8 +395,7 @@ export function TrackMap({
     const next: CameraMode = cameraModeRef.current === 'follow' ? 'overview' : 'follow';
     cameraModeRef.current = next;
     setCameraMode(next);
-    overviewManualPendingRef.current = false;
-    applyCameraForMode(900);
+    applyCameraForMode(900); // clears the browse hold too — see its own comment
   }, [applyCameraForMode]);
 
   const zoomBy = useCallback((delta: number) => {
@@ -614,7 +629,7 @@ export function TrackMap({
     if (!active) return;
     cameraModeRef.current = 'follow';
     bearingRef.current = null;
-    overviewManualPendingRef.current = false;
+    manualPendingRef.current = false;
     // Deferred by a tick, not called straight from the effect body — the
     // React Compiler's lint rule traces a call through and flags any
     // setState it can reach as a synchronous effect update. Same pattern as
@@ -645,10 +660,12 @@ export function TrackMap({
 
     const armAutoReturn = () => {
       if (autoReturnTimerRef.current) clearTimeout(autoReturnTimerRef.current);
-      overviewManualPendingRef.current = true;
+      manualPendingRef.current = true;
+      // Each new gesture RESTARTS the window (the clear above), so a runner
+      // panning around for a while keeps the map theirs for
+      // AUTO_RETURN_IDLE_MS after they stop, not after they started.
       autoReturnTimerRef.current = setTimeout(() => {
-        overviewManualPendingRef.current = false;
-        applyCameraForMode(900);
+        applyCameraForMode(900); // resets manualPendingRef itself
       }, AUTO_RETURN_IDLE_MS);
     };
 
@@ -855,30 +872,24 @@ export function TrackMap({
     // their finished route would fight them. Re-applies whichever mode is
     // current on every fix — follow re-centers on the runner (and rotates
     // to their latest smoothed bearing); overview re-fits the growing
-    // bounds. This is what makes gesture drift mostly self-heal within a
-    // fix or two while running, well before AUTO_RETURN_IDLE_MS would fire
-    // — that timer's real job is covering the gap this can't: a paused
-    // session, where no new fix arrives to trigger it. Gated on `head`
-    // existing (not just `running`) for the same reason as the marker
-    // effect above — there's nothing to center or fit until a real fix
-    // exists.
+    // bounds. Gated on `head` existing (not just `running`) for the same
+    // reason as the marker effect above — there's nothing to center or fit
+    // until a real fix exists.
     //
-    // Overview is the one exception: it's the mode a runner switches to
-    // specifically to step back and read the whole shape of what they've
-    // covered, so a fix landing mid-inspection must not snap it back out
-    // from under them. `overviewManualPendingRef` is true for exactly the
-    // AUTO_RETURN_IDLE_MS window after a manual pan/zoom in overview — while
-    // it's true, this effect stays hands-off and the armed auto-return timer
-    // (not this per-fix path) is what eventually re-fits. Follow mode never
-    // sets this ref's check path in play; it keeps its existing glued
-    // behaviour unchanged.
+    // `manualPendingRef` suspends ALL of that for the AUTO_RETURN_IDLE_MS
+    // window after a real pan/pinch, in BOTH modes. The check used to read
+    // `cameraModeRef.current === 'overview' && manualPending`, which meant
+    // follow mode — the mode every session starts in — re-centred on the
+    // runner one fix (~1-2s) after any gesture. That is what made the map
+    // impossible to explore mid-run: the pan landed, and the map took
+    // itself back before you could read it (Pedro, 2026-09-08). The
+    // armed auto-return timer, not this path, is what returns the camera.
+    //
+    // Note this cannot strand the camera: the ONLY thing that sets the ref
+    // is a user gesture, and applyCameraForMode clears it on every
+    // authoritative placement, including the timer's own.
     const head = here ?? points[points.length - 1];
-    if (
-      head &&
-      running &&
-      flownRef.current &&
-      !(cameraModeRef.current === 'overview' && overviewManualPendingRef.current)
-    ) {
+    if (head && running && flownRef.current && !manualPendingRef.current) {
       applyCameraForMode(900);
     }
   }, [points, running, here, applyCameraForMode]);

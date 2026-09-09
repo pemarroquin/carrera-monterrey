@@ -382,10 +382,21 @@ export const SESSION_FLY_MS = 2200;
  *
  * How long the camera sits wherever a user gesture (drag/pinch) left it
  * before gliding back to (runner position, preferredZoom, SESSION_PITCH).
- * Long enough that a deliberate look-around isn't yanked back mid-glance;
- * short enough that a stray pinch self-heals within a few strides.
+ *
+ * 30s, up from 5s (Pedro, 2026-09-08: "it's frustrating when trying to
+ * browse through the map... it's almost as if it doesn't allow you to
+ * explore"). 5s was picked to make a STRAY pinch self-heal within a few
+ * strides, and it does — but it is far too short to look at anything on
+ * purpose: pan away to check what is ahead and the map is gone before you
+ * have read it. The stray-gesture case still self-heals, just later, and
+ * the recenter control is always on screen for anyone who wants it sooner.
+ *
+ * This constant only ever mattered once the per-fix follow stopped
+ * overriding it — see track-map.web.tsx's manualPendingRef, which used to
+ * be honoured in overview mode only, so in follow mode a pan was undone by
+ * the next GPS fix (~1-2s) and this timer never got to run at all.
  */
-export const AUTO_RETURN_IDLE_MS = 5000;
+export const AUTO_RETURN_IDLE_MS = 30000;
 /** Zoom delta per tap of the +/- buttons. */
 export const ZOOM_STEP = 1;
 
