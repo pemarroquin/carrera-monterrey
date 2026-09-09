@@ -48,31 +48,51 @@ import { haversineM, type LatLng } from '@/lib/territory';
  * Returns [] when nothing is enclosed, which is the common case: an
  * out-and-back, a point-to-point run, or a loop that never closed.
  */
-export function enclosedCells(cells: string[], res: number): string[] {
+/**
+ * Every region this cell set surrounds, ONE ARRAY PER HOLE.
+ *
+ * The single place the dissolve → hole-ring → fill pipeline is written.
+ * `enclosedCells` and `noiseHoles` are both thin wrappers over it, and
+ * `npm run measure-holes` reports on it, so there is no second copy to
+ * drift. That is not a style preference here: gap-policy.ts exists only
+ * because the recorder and the tile builder each applied the caps
+ * themselves and disagreed about one real gap, and verify-claims.ts runs
+ * the app's own functions for the same reason.
+ *
+ * Kept as one array PER HOLE rather than one flat set because the size of
+ * an individual hole is a decision input — see noiseHoles' cap. Callers that
+ * do not care flatten it.
+ *
+ * GeoJSON winding ([lng, lat]) from both h3 calls, so the rings handed to
+ * polygonToCells are already in the order it expects.
+ */
+export function holesOf(cells: string[], res: number): string[][] {
   // Two cells cannot surround anything; skip the dissolve entirely.
   if (cells.length < 3) return [];
 
-  // GeoJSON winding ([lng, lat]) from both calls, so the rings handed to
-  // polygonToCells are already in the order it expects.
-  const outlines = cellsToMultiPolygon(cells, true);
-
   const owned = new Set(cells);
-  const enclosed = new Set<string>();
+  const holes: string[][] = [];
 
-  for (const polygon of outlines) {
-    // Ring 0 is the outer boundary; every ring after it is a hole — an
-    // empty region this cell set surrounds.
+  for (const polygon of cellsToMultiPolygon(cells, true)) {
+    // Ring 0 is the outer boundary; every ring after it is a hole — an empty
+    // region this cell set surrounds.
     for (let ring = 1; ring < polygon.length; ring++) {
-      for (const cell of polygonToCells([polygon[ring]], res, true)) {
-        // polygonToCells fills by cell centre, so a cell of the ring itself
-        // can be picked up when the hole's edge runs through it. Claiming
-        // it again would be harmless but double-counts in every total.
-        if (!owned.has(cell)) enclosed.add(cell);
-      }
+      // polygonToCells fills by cell centre, so a cell of the ring itself can
+      // be picked up when the hole's edge runs through it. Claiming it again
+      // would be harmless but double-counts in every total.
+      const hole = polygonToCells([polygon[ring]], res, true).filter((c) => !owned.has(c));
+      if (hole.length > 0) holes.push(hole);
     }
   }
 
-  return [...enclosed];
+  return holes;
+}
+
+export function enclosedCells(cells: string[], res: number): string[] {
+  // Deduplicated across holes: two rings of one dissolved shape cannot
+  // normally share a cell, but a Set costs nothing and a double-counted cell
+  // would inflate every total that reads this.
+  return [...new Set(holesOf(cells, res).flat())];
 }
 
 /**
@@ -172,21 +192,9 @@ export function noiseHoles(
   res: number,
   maxCells: number = MAX_NOISE_HOLE_CELLS,
 ): string[] {
-  if (cells.length < 3) return [];
-
-  const owned = new Set(cells);
-  const filled: string[] = [];
-
-  for (const polygon of cellsToMultiPolygon(cells, true)) {
-    // Ring 0 is the outer boundary; every ring after it is a hole.
-    for (let ring = 1; ring < polygon.length; ring++) {
-      // Each hole is collected separately — enclosedCells unions them all
-      // into one set, which is exactly what this cannot do: the SIZE of the
-      // individual hole is what decides whether it may be filled.
-      const hole = polygonToCells([polygon[ring]], res, true).filter((c) => !owned.has(c));
-      if (hole.length > 0 && hole.length <= maxCells) filled.push(...hole);
-    }
-  }
-
-  return filled;
+  // Each hole is judged WHOLE — see this function's doc. holesOf keeps them
+  // separate for exactly this reason.
+  return holesOf(cells, res)
+    .filter((hole) => hole.length <= maxCells)
+    .flat();
 }

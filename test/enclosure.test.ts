@@ -5,7 +5,7 @@
 import { gridDisk, gridRingUnsafe, latLngToCell } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 
-import { MAX_NOISE_HOLE_CELLS, enclosedCells, noiseHoles } from '@/lib/enclosure';
+import { MAX_NOISE_HOLE_CELLS, enclosedCells, holesOf, noiseHoles } from '@/lib/enclosure';
 import { DEFAULT_TILE_RES, pathToTiles, type TilePoint } from '@/lib/tiles';
 
 const CENTRE = latLngToCell(25.6866, -100.3161, DEFAULT_TILE_RES);
@@ -172,5 +172,36 @@ describe('noiseHoles', () => {
     // fresh `npm run measure-holes`, not a guess.
     expect(MAX_NOISE_HOLE_CELLS).toBeGreaterThanOrEqual(3);
     expect(MAX_NOISE_HOLE_CELLS).toBeLessThan(9);
+  });
+});
+
+describe('holesOf', () => {
+  const centre = latLngToCell(25.6866, -100.3161, DEFAULT_TILE_RES);
+
+  it('keeps each hole separate — the size is a decision input', () => {
+    const solid = gridDisk(centre, 8);
+    const holeA = [centre];
+    const holeB = gridDisk(solid[40], 1);
+    const gone = new Set([...holeA, ...holeB]);
+    const sizes = holesOf(
+      solid.filter((c) => !gone.has(c)),
+      DEFAULT_TILE_RES,
+    )
+      .map((h) => h.length)
+      .sort((a, b) => a - b);
+    expect(sizes).toEqual([1, 7]);
+  });
+
+  it('is the ONE implementation both wrappers ride on', () => {
+    // enclosedCells is holesOf flattened; noiseHoles is holesOf capped. If
+    // these ever diverge, a second copy of the pipeline has reappeared —
+    // which is the drift gap-policy.ts exists because of.
+    const solid = gridDisk(centre, 6);
+    const cells = solid.filter((c) => c !== centre);
+    const all = holesOf(cells, DEFAULT_TILE_RES);
+    expect(enclosedCells(cells, DEFAULT_TILE_RES).sort()).toEqual([...new Set(all.flat())].sort());
+    expect(noiseHoles(cells, DEFAULT_TILE_RES).sort()).toEqual(
+      all.filter((h) => h.length <= MAX_NOISE_HOLE_CELLS).flat().sort(),
+    );
   });
 });

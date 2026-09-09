@@ -31,9 +31,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cellArea, cellToLatLng, cellsToMultiPolygon, gridDisk, polygonToCells, UNITS } from 'h3-js';
+import { cellArea, cellToLatLng, gridDisk, UNITS } from 'h3-js';
 
-import { MAX_NOISE_HOLE_CELLS, noiseHoles } from '@/lib/enclosure';
+import { MAX_NOISE_HOLE_CELLS, holesOf, noiseHoles } from '@/lib/enclosure';
 import { DEFAULT_TILE_RES } from '@/lib/tiles';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -66,27 +66,6 @@ async function restAll<T>(query: string): Promise<T[]> {
   return out;
 }
 
-/**
- * Every hole in a cell set, as its own list of cells.
- *
- * Uses the same dissolve → ring-index-1+ → polygonToCells pipeline as
- * enclosure.ts, deliberately: the numbers reported here have to describe
- * what the real fill would actually see, not an approximation of it. The
- * difference is only that enclosure.ts unions every hole into one set, while
- * this keeps them separate — the SIZE DISTRIBUTION is the whole point.
- */
-function holesOf(cells: string[], res: number): string[][] {
-  if (cells.length < 3) return [];
-  const owned = new Set(cells);
-  const holes: string[][] = [];
-  for (const polygon of cellsToMultiPolygon(cells, true)) {
-    for (let ring = 1; ring < polygon.length; ring++) {
-      const filled = polygonToCells([polygon[ring]], res, true).filter((c) => !owned.has(c));
-      if (filled.length > 0) holes.push(filled);
-    }
-  }
-  return holes;
-}
 
 /**
  * How wide a hole is, in metres — the number that can be compared against
