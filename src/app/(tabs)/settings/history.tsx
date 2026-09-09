@@ -1,11 +1,14 @@
-// Settings › Where you've run — the permanent personal record.
+// Settings › the permanent personal record of ground taken.
 //
 // The counterpart to the live map, and deliberately a different surface.
 // Under CONQUEST the map and the leaderboard show ground you hold RIGHT NOW,
 // which can fall while you sleep. That is the game. But it means the map
-// stopped being a record, and "I have run every street in this
-// neighbourhood" is worth keeping — so it moved here, where nobody can take
-// it.
+// stopped being a record, and "I took every street in this neighbourhood" is
+// worth keeping — so it lives here, where nobody can take it.
+//
+// It draws ground by THE SAME RULE A RUN DOES: cells crossed, plus the
+// interior of any loop a single session closed. Purely informative — nothing
+// on this screen is scored, ranked or claimable.
 //
 // It is also where a run that could not claim territory still shows up: a
 // session uploaded past the claim window saves normally and appears on this
@@ -16,13 +19,13 @@ import { cellsToMultiPolygon } from 'h3-js';
 import type { MultiPolygon } from 'geojson';
 
 import { SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
-import { noiseHoles } from '@/lib/enclosure';
+import { enclosedCells, noiseHoles } from '@/lib/enclosure';
 import { DEFAULT_TILE_RES } from '@/lib/tiles';
 import { TerritoriesMap, type TerritoryFeature } from '@/components/territories-map';
 import { useI18n } from '@/lib/i18n';
 import { fetchMyVisitedCells } from '@/lib/territory-sync';
 
-type State = { status: 'loading' } | { status: 'error' } | { status: 'ready'; cells: string[] };
+type State = { status: 'loading' } | { status: 'error' } | { status: 'ready'; runs: string[][] };
 
 export default function HistoryScreen() {
   const { c } = useSettingsColors();
@@ -36,7 +39,7 @@ export default function HistoryScreen() {
     const id = setTimeout(() => {
       fetchMyVisitedCells().then((outcome) => {
         if (stale) return;
-        setState(outcome.ok ? { status: 'ready', cells: outcome.cells } : { status: 'error' });
+        setState(outcome.ok ? { status: 'ready', runs: outcome.runs } : { status: 'error' });
       });
     }, 0);
     return () => {
@@ -63,7 +66,7 @@ export default function HistoryScreen() {
     );
   }
 
-  if (state.cells.length === 0) {
+  if (state.runs.length === 0) {
     return (
       <SettingsPage>
         <Text style={[settingsStyles.hint, { color: c.textSecondary }]}>{t('settings.historyEmpty')}</Text>
@@ -71,22 +74,41 @@ export default function HistoryScreen() {
     );
   }
 
-  // Sampling holes are filled before anything is drawn, and the SAME rule
-  // the claim path uses (enclosure.ts's measured cap) so this map and the
-  // territory it depicts can never disagree about a cell.
+  // Ground is assembled by the SAME rule a live run uses: cells crossed,
+  // plus the interior of any loop THAT SINGLE SESSION closed.
   //
-  // Why it is needed here at all, when uploadRun already fills them: that
-  // only ever ran for uploads made after it shipped. Every hole already in a
-  // runner's history predates it, and a screen that still showed those black
-  // hexagons would look exactly as broken as the screenshot that started
-  // this. Filling at render costs nothing (the cells are already in memory)
-  // and makes the fix retroactive without a backfill migration.
+  // Per run, never across runs. Unioning everything first and enclosing that
+  // would let someone run a city's perimeter over six months and claim
+  // everything inside — the failure enclosure.ts exists to refuse. Enclosing
+  // each run on its own is exactly what the claim path already did to this
+  // same ground, so this screen agrees with territory instead of inventing
+  // anything.
   //
-  // Only holes at or under the cap. The big ones — up to 12 hectares in the
-  // real 2026-09-09 measurement — stay black, because a runner really did go
-  // around those and this map's whole job is to be true about where they
-  // have been.
-  const drawn = [...state.cells, ...noiseHoles(state.cells, DEFAULT_TILE_RES)];
+  // This is what was wrong before 2026-09-09: the screen drew visits ONLY,
+  // and so was the one surface in the app applying no enclosure at all. The
+  // block around Parque El Capitán came back as a 317-cell black hole on a
+  // map whose every other view — including territory_tiles, 100% of it —
+  // already counted it as taken.
+  //
+  // Recomputed here rather than read back from territory_tiles, because
+  // territory answers "what do I hold NOW" and conquest takes ground off
+  // you. Recomputing from the append-only visit log is what keeps this a
+  // permanent record.
+  //
+  // Privacy: these cells were already privacy-zone-trimmed on the way in
+  // (see uploadRun), so enclosure derived from them cannot expose a home
+  // loop the mask removed. The trade is that a loop closed only by its
+  // masked-off ends does not enclose here even though it did at claim time
+  // — the safe direction to be wrong in.
+  const ground = [...new Set(state.runs.flatMap((run) => [...run, ...enclosedCells(run, DEFAULT_TILE_RES)]))];
+
+  // Sampling holes are filled after that, at enclosure.ts's measured cap.
+  // Still needed: a session that never closed its loop encloses nothing, so
+  // a cell the GPS simply missed inside a band run dozens of times is not
+  // covered by the rule above. Measured 2026-09-09, per-run enclosure alone
+  // already leaves ZERO holes on every real account — this is belt and
+  // braces for the runner whose data does not look like theirs.
+  const drawn = [...ground, ...noiseHoles(ground, DEFAULT_TILE_RES)];
 
   // ONE dissolved shape, not one polygon per cell. cellsToMultiPolygon is the
   // same call enclosure.ts and the live maps use, so every surface in the app
@@ -109,9 +131,10 @@ export default function HistoryScreen() {
   return (
     <SettingsPage>
       <Text style={[settingsStyles.hint, { color: c.textSecondary }]}>
-        {/* Counts what is DRAWN, not the raw visit rows. A map with its
-            sampling holes filled and a number that still excluded them would
-            disagree with itself on the same screen. */}
+        {/* Counts what is DRAWN — ground crossed plus ground enclosed —
+            not the raw visit rows. A map showing enclosed ground beside a
+            number that excluded it would disagree with itself on the same
+            screen. */}
         {t('settings.historyHint', { count: drawn.length })}
       </Text>
       <View style={styles.map}>

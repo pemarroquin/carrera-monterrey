@@ -478,12 +478,12 @@ const translations = {
       // Settings › Dónde has corrido. El registro personal permanente — el
       // contrapeso a un mapa que bajo conquista muestra solo lo que tienes
       // AHORA. Aquí no te lo puede quitar nadie.
-      historyTitle: 'Dónde has corrido',
-      historyNavHint: 'Todo el terreno que has pisado. Nadie te lo quita.',
+      historyTitle: 'Terreno que has tomado',
+      historyNavHint: 'Todo lo que has corrido y todo lo que has cerrado. Nadie te lo quita.',
       historyHint: {
-        one: 'Has pisado 1 casilla. Esto no cambia aunque alguien te gane el territorio.',
+        one: '1 casilla, contada como la cuenta una sesión: el terreno que pisaste más lo que rodeaste al cerrar una vuelta. Nadie te la quita de este mapa.',
         other:
-          'Has pisado %{count} casillas. Esto no cambia aunque alguien te gane el territorio.',
+          '%{count} casillas, contadas como las cuenta una sesión: el terreno que pisaste más lo que rodeaste al cerrar una vuelta. Nadie te las quita de este mapa.',
       } as PluralForm,
       historyEmpty: 'Todavía no has guardado ninguna sesión.',
       historyFailed: 'No pudimos cargar tu historial. Revisa tu conexión.',
@@ -959,11 +959,12 @@ const translations = {
       zoneOffHint:
         'Without a privacy zone, the exact start and end of your sessions are uploaded and visible to anyone using the app. Set it where you live.',
       zoneFailed: "We couldn\u2019t save your zone. Check location permission and try again.",
-      historyTitle: "Where you've run",
-      historyNavHint: "Every piece of ground you've covered. Nobody can take it.",
+      historyTitle: 'Ground you have taken',
+      historyNavHint: "Everywhere you've run and everything you've closed. Nobody can take it.",
       historyHint: {
-        one: "You've covered 1 tile. This doesn't change when someone takes territory from you.",
-        other: "You've covered %{count} tiles. This doesn't change when someone takes territory from you.",
+        one: '1 tile, counted the same way a run counts it — ground you crossed plus anything you ran a loop around. Nobody can take it off this map.',
+        other:
+          '%{count} tiles, counted the same way a run counts them — ground you crossed plus anything you ran a loop around. Nobody can take them off this map.',
       } as PluralForm,
       historyEmpty: "You haven't saved a session yet.",
       historyFailed: "We couldn't load your history. Check your connection.",

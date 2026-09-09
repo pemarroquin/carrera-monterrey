@@ -969,36 +969,97 @@ export async function updateDisplayName(name: string): Promise<ProfileOutcome> {
 }
 
 export type VisitedOutcome =
-  | { ok: true; cells: string[] }
+  | { ok: true; runs: string[][] }
   | { ok: false; reason: 'disabled' | 'auth' | 'network' };
 
+/** One `tile_visits` row as this screen reads it. */
+export interface VisitRow {
+  h3: string;
+  run_id: string;
+}
+
 /**
- * Every cell this runner has ever physically covered.
+ * Visit rows → one cell array per run, deduplicated and filtered to the
+ * current tile resolution.
+ *
+ * Pure and exported so it can be tested directly. The alternative was
+ * mocking the whole PostgREST query builder to reach three lines of
+ * bookkeeping, and every failure mode here is SILENT — a run merged into
+ * another, a cell counted twice, a res-11 row surviving — so it is the part
+ * that most needs a test and the least worth hiding behind a mock.
+ *
+ * Grouping is by `run_id` because enclosure is a property of one session
+ * (see fetchMyVisitedCells' doc). Merging two runs would enclose ground
+ * neither of them surrounded.
+ *
+ * The resolution filter matters more here than in a count: these cells get
+ * dissolved into rings to find enclosure, and a set holding two resolutions
+ * dissolves into nonsense rather than into a wrong number. See
+ * isCurrentTileRes.
+ *
+ * Cells are deduplicated WITHIN a run, not across: the log records visits,
+ * so an out-and-back writes the same cell twice in one session, and every
+ * later run over the same street writes it again. Across runs the repeat is
+ * meaningful (each run encloses on its own); within one it is noise.
+ */
+export function groupVisitsByRun(rows: VisitRow[]): string[][] {
+  const byRun = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!isCurrentTileRes(row.h3)) continue;
+    let set = byRun.get(row.run_id);
+    if (!set) {
+      set = new Set();
+      byRun.set(row.run_id, set);
+    }
+    set.add(row.h3);
+  }
+  // A run whose every cell was filtered out leaves no entry at all, rather
+  // than an empty array the caller would have to skip.
+  return [...byRun.values()].map((set) => [...set]);
+}
+
+/**
+ * Every cell this runner has ever covered, GROUPED BY RUN.
  *
  * Reads `tile_visits`, and that choice is the whole feature. `tile_visits`
  * is an append-only log with no update or delete policy, so CONQUEST never
  * touches it: ground taken off you by a later run stays in your history
  * forever, because you did run there. `territory_tiles` answers "what do I
- * hold"; this answers "where have I been", and the two must not be the same
- * surface — that confusion is why the personal record moved off the live map
- * in the first place.
+ * hold"; this answers "what have I ever taken", and the two must not be the
+ * same surface — that confusion is why the personal record moved off the
+ * live map in the first place.
  *
- * Enclosed ground is deliberately absent. It is owned but was never run
- * over, and this is a record of places the runner has actually been.
+ * GROUPED, not flattened, and that is the point of the shape. This used to
+ * return one flat set of cells and its doc said enclosed ground was
+ * "deliberately absent... this is a record of places the runner has actually
+ * been". That reading was overturned on 2026-09-09 by the app disagreeing
+ * with itself: the 342-cell interior of the block around Parque El Capitán
+ * is 100% present in `territory_tiles` — the runner closed a loop around it
+ * in one session and the app claimed it — while this screen drew it as a
+ * black hole. Every other surface applies per-run enclosure; this was the
+ * only one that applied none, so the same ground was owned everywhere and
+ * missing here.
+ *
+ * The caller needs the runs separately because enclosure is a property of a
+ * SINGLE session, never of the union. Handing back a flat set would force it
+ * to either skip enclosure (the bug) or compute it across runs — which would
+ * let someone run a city's perimeter over six months and claim everything
+ * inside, the exact failure this codebase refuses everywhere. See
+ * enclosure.ts's header and gap-policy.ts's bridge caps.
  *
  * Paged rather than a single request: PostgREST caps a response at 1000 rows
  * by default, so a runner past that would silently see a truncated history
  * — a wrong answer that looks like a complete one.
  */
 export async function fetchMyVisitedCells(): Promise<VisitedOutcome> {
-  return withSession<{ cells: string[] }>(async (session) => {
+  return withSession<{ runs: string[][] }>(async (session) => {
     const PAGE = 1000;
-    const seen = new Set<string>();
+    const rows: VisitRow[] = [];
 
     for (let offset = 0; ; offset += PAGE) {
       const { data, error } = await supabase
         .from('tile_visits')
-        .select('h3')
+        .select('h3,run_id')
         .eq('user_id', session.user.id)
         // Ordered by the FULL primary key, not just h3. tile_visits is keyed
         // (h3, run_id), so the same cell appears once per run that crossed
@@ -1015,12 +1076,10 @@ export async function fetchMyVisitedCells(): Promise<VisitedOutcome> {
       if (error) return { ok: false, reason: 'network' };
       if (!data || data.length === 0) break;
 
-      // The same cell appears once per run that crossed it — the log records
-      // visits, not ground.
-      for (const row of data) seen.add(row.h3);
+      rows.push(...data);
       if (data.length < PAGE) break;
     }
 
-    return { ok: true, cells: [...seen] };
+    return { ok: true, runs: groupVisitsByRun(rows) };
   });
 }
