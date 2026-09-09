@@ -20,7 +20,7 @@
 /**
  * Tile Coverage Model rendering (brief §5/§6 step 4). Own claimed tiles
  * render at this opacity in the run's own colour, on both platforms —
- * chosen to sit close to LIVE_FILL_OPACITY_HIGH/FENCE_FILL_OPACITY's own
+ * chosen to sit close to FENCE_FILL_OPACITY's own
  * "vibrant but not opaque" range rather than a fresh guess. Rival-owned
  * tiles get their own, more muted constant so contested ground reads at a
  * glance without needing a legend (brief §5).
@@ -133,49 +133,27 @@ export const MAP_SLOT_ROUTE = 'top';
 export const MAP_SLOT_FILL = 'middle';
 
 /**
- * How often the live territory fill (buildFence() over the growing route)
- * is recomputed while running, whichever trips first — see
- * track-map.web.tsx. turf's clean/simplify/union pipeline is O(n) on a ring
- * that only grows; recomputing it on every 2s fix would redo that work for
- * the length of a 30+ minute run. buildFence itself is cheap to call when
- * there's nothing new to give it, so the throttle lives at the call site,
- * not inside territory.ts.
+ * How often the live claimed-ground recompute runs while recording,
+ * whichever trips first — see index.tsx, which owns the throttle and hands
+ * both track maps a ready `tiles` prop.
+ *
+ * Named for the enclosure fill these were originally written for. That fill
+ * is gone (its ring drew a chord across unrun ground and a second copy of
+ * the route — see track-map.web.tsx's header), but the cadence outlived it:
+ * pathToTiles over a growing path has the same shape of cost as buildFence
+ * did, and recomputing on every 2s fix would redo that work for the length
+ * of a 30+ minute run.
  */
 export const LIVE_FILL_RECOMPUTE_MS = 5000;
 export const LIVE_FILL_RECOMPUTE_POINTS = 10;
 
 /**
- * Live territory fill opacity (GL, web only) — deliberately its OWN
- * constants, not FENCE_FILL_OPACITY, which is tuned for the Static Images
- * API's classic dark-v11 style (no light preset, no emissive-strength,
- * always fully lit). Once EMISSIVE_STRENGTH_FULL corrects the raw fill
- * colour, it reads far more vivid than the same colour did muddied by the
- * night preset — these read as vibrant but subtle against the corrected
- * colour, rather than needing the higher number that was really
- * compensating for the colour being washed out.
- *
- * Two values, not one: the fill BREATHES between them while a session is
- * live (see track-map.web.tsx's pulse effect) rather than sitting at a flat
- * opacity — Pedro's ask was for something animated and alive, not a static
- * colour wash. Each `setPaintProperty` call is cheap (fires once per
- * LIVE_FILL_PULSE_MS, not every frame); `fill-opacity-transition`, set once
- * when the layer is created, is what makes the GPU interpolate smoothly
- * between the two values in between calls — the same trick already used for
- * the wall's rise and the summary fence's fade-in, NOT a
- * requestAnimationFrame loop repainting the whole map every frame for the
- * length of a run (see the "you are here" pulse dot's own comment for why
- * that specific trap matters here).
- */
-export const LIVE_FILL_OPACITY_LOW = 0.14;
-export const LIVE_FILL_OPACITY_HIGH = 0.3;
-/** One full breathe (low → high → low) takes roughly 2x this, since each
- *  call flips to the opposite value. */
-export const LIVE_FILL_PULSE_MS = 2600;
-
-/**
- * Chromatic rim traced around the live fill's growing boundary — the same
- * `line-gradient` technique as the route line and the summary outline
- * (ROUTE_GRADIENT), applied to the territory's EDGE instead of the path.
+ * Chromatic rim traced around a SAVED territory's boundary (see
+ * territories-map.web.tsx) — the same `line-gradient` technique as the route
+ * line and the summary outline (ROUTE_GRADIENT), applied to the territory's
+ * EDGE instead of the path. The live Track map has no such rim: there, the
+ * boundary would be an enclosure ring, which drew a chord across unrun
+ * ground (track-map.web.tsx's header).
  * This is the closest a flat 2D map layer gets to a rim-lit glow: the fill
  * itself stays each run's own identity colour (FENCE_COLOR_SETS — needed to
  * tell territories apart when several are shown together), so only the
@@ -200,9 +178,9 @@ export const LIVE_FILL_OUTLINE_WIDTH = 2.5;
  *
  * The smoothness is the GPU's, not a render loop's:
  * `fill-extrusion-color-transition` is set to this same duration, so GL
- * interpolates between each pair of stops. Same technique as the live map's
- * opacity breathe (LIVE_FILL_PULSE_MS), for the same reason — a rAF loop
- * repainting a map layer 60 times a second is a battery cost mid-run.
+ * interpolates between each pair of stops. Same technique as the wall's
+ * rise (FENCE_RISE_MS), for the same reason — a rAF loop repainting a map
+ * layer 60 times a second is a battery cost mid-run.
  */
 export const FENCE_SHIMMER_STEP_MS = 2200;
 
@@ -306,9 +284,9 @@ export const ROUTE_GRADIENT: [number, string][] = [
  * "still alive" motion reads better calm than urgent, and a slower loop is
  * what lets the tick cadence below stay modest while each frame still moves
  * the pattern only a few pixels. Deliberately NOT a neat multiple of
- * LIVE_FILL_PULSE_MS — the fill's breathe and this flow drift in and out of
- * phase instead of pulsing in lockstep, which reads as two independent
- * living things rather than one metronome.
+ * FENCE_SHIMMER_STEP_MS — a saved territory's fill shimmer and this flow
+ * drift in and out of phase instead of pulsing in lockstep, which reads as
+ * two independent living things rather than one metronome.
  */
 export const ROUTE_GRADIENT_LOOP_MS = 4400;
 
@@ -316,7 +294,7 @@ export const ROUTE_GRADIENT_LOOP_MS = 4400;
  * Tick cadence for that loop. `line-gradient` is a ColorRampProperty with NO
  * `-transition` support at all (confirmed against the installed mapbox-gl
  * typings — it is neither a DataDrivenProperty nor a DataConstantProperty),
- * so unlike LIVE_FILL_OPACITY's breathe there is no GPU tween between calls:
+ * so unlike a `fill-opacity` transition there is no GPU tween between calls:
  * every update lands exactly as drawn.
  *
  * Smoothness therefore has to come from making each update SMALL, not from
