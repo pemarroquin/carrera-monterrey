@@ -473,6 +473,12 @@ const translations = {
       privacyZone: 'Zona privada',
       zoneSetHere: 'Usar mi ubicación',
       zoneRemove: 'Quitar',
+      // El alcance es real, no tranquilizador de más: maskPath corre cuando
+      // TERMINA una sesión (index.tsx), así que lo que ya subiste sigue
+      // recortado y quitar la zona solo afecta lo que venga.
+      zoneRemoveConfirmBody:
+        'A partir de ahora, el inicio y el final exactos de cada sesión se suben y cualquier persona que use la app puede verlos. Las sesiones que ya subiste siguen recortadas: la zona se aplica cuando termina una sesión, no después.',
+      zoneRemoveConfirmAction: 'Quitar de todas formas',
       zoneSetting: 'Guardando…',
       // El estado ya lo dice el indicador de la fila (Status en
       // location.tsx), así que la explicación ya no empieza por
@@ -967,6 +973,12 @@ const translations = {
       privacyZone: 'Privacy zone',
       zoneSetHere: 'Use my location',
       zoneRemove: 'Remove',
+      // The scope is accurate, not reassuring: maskPath runs when a session
+      // ENDS (index.tsx), so what is already uploaded stays trimmed and
+      // removing the zone only affects what comes next.
+      zoneRemoveConfirmBody:
+        'From now on, the exact start and end of every session are uploaded and visible to anyone using the app. Sessions you have already uploaded stay trimmed — the zone is applied when a session ends, not afterwards.',
+      zoneRemoveConfirmAction: 'Remove anyway',
       zoneSetting: 'Saving…',
       // The row's own status indicator says whether it is on now (Status in
       // location.tsx), so the explanation no longer opens with "On." —
