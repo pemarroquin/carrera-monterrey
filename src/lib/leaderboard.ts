@@ -26,6 +26,11 @@ import { featureCollection } from '@turf/helpers';
 import union from '@turf/union';
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
 
+import { cellToChildrenSize } from 'h3-js';
+
+import { districtOfCell } from '@/lib/district';
+import { DEFAULT_TILE_RES } from '@/lib/tiles';
+
 export interface LeaderboardRun {
   userId: string;
   displayName: string | null;
@@ -146,6 +151,9 @@ export function regionsWithRuns(runs: LeaderboardRun[]): string[] {
  *  and the flagged status of the run that claimed it — see
  *  territory-sync.ts's fetchTileLeaderboard for how this is assembled. */
 export interface TileOwnerRow {
+  /** The cell itself. Was fetched and discarded before districtConquest
+   *  needed it — the district filter and the map both key off it. */
+  h3: string;
   ownerId: string;
   displayName: string | null;
   regionId: string | null;
@@ -157,61 +165,137 @@ export interface TileOwnerRow {
   flagged: boolean;
 }
 
-export interface TileLeaderboardEntry {
+// rankByTileCount and TileLeaderboardEntry lived here and are DELETED, not
+// deprecated: districtConquest replaced them outright when the leaderboard
+// stopped ranking by a raw tile count over a whole metro. Nothing imported
+// them any more — the two remaining mentions in this repo are comments.
+//
+// Not deleted alongside them, deliberately: rankByArea / unionAreaM2 /
+// regionsWithRuns above. Those were already dead before this change (the
+// tile-coverage model replaced them) and a prior brief explicitly said to
+// keep them and their ~30 tests through that migration. Removing them is a
+// separate decision and not this branch's to make.
+
+
+// ============================================================================
+// BOARD 1 — CONQUEST, as a share of the district's park paths
+// ============================================================================
+//
+// What the board shows changed from a raw tile count to a PERCENTAGE, at
+// Pedro's ask: "% of parks conquered in the municipio I'm located at,
+// period." Two substitutions were needed to deliver that, and both are
+// deliberate:
+//
+//   municipio -> DISTRICT. Nothing can resolve a lat/lng to a municipio and
+//   the cheap substitute measured 21.3% ambiguous. See district.ts's header
+//   for the full reasoning and the games precedent.
+//
+//   "parks" -> PARK PATHS, which is the denominator park_paths.sql already
+//   measured as the only one that moves: one 5.7 km run is 0.262% of San
+//   Pedro's area, 0.63% of its street network, and 5.5% of its park paths.
+//
+// CONQUERED, NOT VISITED — and this is the one place where this board and
+// the `municipio_progress` RPC that shipped the same week deliberately
+// disagree. That RPC counts visits, on purpose, because it is a personal
+// record of where someone went. This is a contest over ground, so it counts
+// what a runner OWNS: territory_tiles.owner_id. The two numbers will differ
+// for the same runner (enclosure can hand you park paths you never set foot
+// on) and neither is wrong.
+//
+// Zero migrations, which is why it is here rather than in SQL: every tile's
+// h3 + owner_id is already fetched by fetchTileLeaderboard, and park cells
+// are H3-keyed, so the whole thing is a set intersection on data in memory.
+// Migrations in this project are applied BY HAND and an unapplied one reads
+// as an honest zero (see CLAUDE.md, and the backlog's own warnings) — a
+// leaderboard that says 0% because nobody ran the SQL is indistinguishable
+// from one that says 0% because nobody ran.
+
+export interface ConquestEntry {
   userId: string;
   displayName: string | null;
-  /** Tiles this user currently owns — Layer 1's "permanent progression"
-   *  number (brief §1.5). Not a percentage: that needs §1's real
-   *  municipio/runnable-tile denominator, explicitly out of scope this
-   *  pass — see index.tsx and the executor's report. */
-  tileCount: number;
-  /** How many of tileCount came from a run the speed trigger flagged. */
-  flaggedTileCount: number;
+  /**
+   * This runner's share of the CLAIMED ground in the district, 0-1.
+   *
+   * Share of claimed, not share of the district, and that was measured. A
+   * res-7 district holds 16 807 res-12 cells and most of them are buildings,
+   * private land or water — ground nobody can run. Against that denominator
+   * every real runner sits between 0.02% and 2.39% (measured across all four
+   * live districts, 2026-09-09) and no amount of running moves it. That is
+   * precisely the "years or never" denominator park_paths.sql measured and
+   * rejected — 0.262% of a municipio's area for a 5.7 km run — and an
+   * earlier version of this file reproduced it.
+   *
+   * Against claimed ground the same runs read 8.6% to 91.4%: 58.5% against
+   * 41.5% is a contest, 85% against 15% is a rout you can see. That is the
+   * question a leaderboard asks — who holds this place — and it is inherently
+   * relative. It also moves the moment anyone runs, in both directions,
+   * which is what makes it worth defending.
+   */
+  share: number;
+  /** Cells this runner owns in the district. The absolute number, kept
+   *  because a share alone cannot distinguish holding half of a busy
+   *  district from holding half of an empty one. */
+  cellsHeld: number;
+  flaggedCellsHeld: number;
+}
+
+export interface DistrictConquest {
+  entries: ConquestEntry[];
+  /** Cells owned by anyone in this district — the shares' denominator. */
+  claimedTotal: number;
+  /** Every res-12 cell in the arena: 16 807, always, anywhere on Earth, with
+   *  no data at all. Not a share denominator (see ConquestEntry.share) — it
+   *  is what the FRONTIER is measured against: how much of this district has
+   *  been claimed by anyone yet. Small is the honest answer there, and the
+   *  point: it is how much is left to take. */
+  districtTotal: number;
 }
 
 /**
- * Ranks users by tiles owned, descending. `regionId` narrows to tiles
- * claimed by a run tagged with that region (the SAME coarse metro string as
- * rankByArea's `regionId` param — see TileOwnerRow.regionId's own doc);
- * pass null for the global board. Ties broken by user id for a stable order
- * between loads, same reasoning as rankByArea.
+ * Board 1 for one district — who holds the claimed ground.
  *
- * A user with zero tiles in the selected region drops off entirely, same
- * "a regional board is a claim about that metro" reasoning as rankByArea.
+ * Pure, over rows already fetched. Ties broken by user id for a stable order
+ * between loads, same reasoning as the rest of this file.
  */
-export function rankByTileCount(
-  tiles: TileOwnerRow[],
-  regionId: string | null,
-): TileLeaderboardEntry[] {
+export function districtConquest(tiles: TileOwnerRow[], district: string): DistrictConquest {
   const byUser = new Map<
     string,
-    { displayName: string | null; tileCount: number; flaggedTileCount: number }
+    { displayName: string | null; cellsHeld: number; flaggedCellsHeld: number }
   >();
+
+  let claimedTotal = 0;
   for (const tile of tiles) {
-    if (regionId !== null && tile.regionId !== regionId) continue;
-    const existing = byUser.get(tile.ownerId);
-    if (existing) {
-      existing.tileCount++;
-      if (tile.flagged) existing.flaggedTileCount++;
-      // Any row's name will do (they all come from the same profile row) —
-      // fill in a set one over a null in case of a partial join, same as
-      // rankByArea.
-      if (existing.displayName === null && tile.displayName !== null) {
-        existing.displayName = tile.displayName;
-      }
-    } else {
-      byUser.set(tile.ownerId, {
-        displayName: tile.displayName,
-        tileCount: 1,
-        flaggedTileCount: tile.flagged ? 1 : 0,
-      });
+    // districtOfCell also rejects any cell not at the tile resolution, so an
+    // unconverted res-11 tile is excluded rather than inflating a district.
+    if (districtOfCell(tile.h3) !== district) continue;
+    claimedTotal++;
+    let entry = byUser.get(tile.ownerId);
+    if (!entry) {
+      entry = { displayName: tile.displayName, cellsHeld: 0, flaggedCellsHeld: 0 };
+      byUser.set(tile.ownerId, entry);
+    }
+    entry.cellsHeld++;
+    if (tile.flagged) entry.flaggedCellsHeld++;
+    if (entry.displayName === null && tile.displayName !== null) {
+      entry.displayName = tile.displayName;
     }
   }
 
-  const entries: TileLeaderboardEntry[] = [];
-  for (const [userId, v] of byUser) {
-    entries.push({ userId, ...v });
-  }
-  entries.sort((a, b) => b.tileCount - a.tileCount || a.userId.localeCompare(b.userId));
-  return entries;
+  const entries: ConquestEntry[] = [...byUser.entries()]
+    .map(([userId, agg]) => ({
+      userId,
+      displayName: agg.displayName,
+      // claimedTotal is 0 only when byUser is empty, so this never divides by
+      // zero — but it is written defensively anyway, because a NaN reaching
+      // the UI would render as "NaN%" rather than fail.
+      share: claimedTotal > 0 ? agg.cellsHeld / claimedTotal : 0,
+      cellsHeld: agg.cellsHeld,
+      flaggedCellsHeld: agg.flaggedCellsHeld,
+    }))
+    .sort(
+      (a, b) =>
+        b.cellsHeld - a.cellsHeld || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
+    );
+
+  return { entries, claimedTotal, districtTotal: cellToChildrenSize(district, DEFAULT_TILE_RES) };
 }

@@ -204,23 +204,6 @@ const translations = {
       // Not a failure and not an accusation: the run saved, it was just
       // uploaded too late to compete for ground.
       claimTooOld: 'Subiste esta sesión muy tarde para competir por territorio. Se guardó en tu historial.',
-      // Naming a zone (areas.ts, Board 2). Offered only when the run cerró
-      // un circuito — a zone is a piece of ground worth returning to, and a
-      // line is not that.
-      areaPromptTitle: '¿Nombrar esta zona?',
-      // The two facts a runner needs before committing: it is public and it
-      // is permanent. Both are conditions of the game, not fine print — a
-      // zone only you know about is una que ganas para siempre sin
-      // competencia, and a zone whose forma se puede mover no es un duelo
-      // justo.
-      areaPromptBody:
-        'Cualquiera puede competir aquí. Gana quien venga más días en los últimos 30 — no quien corra más lejos. El nombre y la forma quedan fijos.',
-      areaPromptPlaceholder: 'Parque, cuadra, tu circuito…',
-      areaPromptSave: 'Crear zona',
-      areaPromptSaving: 'Creando…',
-      areaPromptSkip: 'Ahora no',
-      areaPromptCreated: 'Zona creada. Vuelve mañana para defenderla.',
-      areaPromptFailed: 'No pudimos crear la zona. Puedes intentarlo otra vez.',
       // Stat-bar label replacing `area` (still defined above, unused by the
       // session-end screen now — see index.tsx) — brief §6 step 5.
       tiles: 'Casillas',
@@ -251,7 +234,6 @@ const translations = {
       soonTitle: 'Muy pronto',
       soonBody:
         'Aquí verás quién tiene más territorio. Por ahora corre y acumula el tuyo — se contará cuando abramos la tabla.',
-      global: 'Global',
       anonymous: 'Anónimo',
       // runs/flagged above are UNCHANGED (brief §4: don't delete) but no
       // longer rendered — the tile-count board (tiles/flaggedTiles below)
@@ -264,38 +246,55 @@ const translations = {
         one: '1 sesión marcada',
         other: '%{count} sesiones marcadas',
       } as PluralForm,
-      tiles: {
-        one: '1 casilla',
-        other: '%{count} casillas',
-      } as PluralForm,
       flaggedTiles: {
         one: '1 casilla de sesión marcada',
         other: '%{count} casillas de sesiones marcadas',
       } as PluralForm,
       // Board 1 counts tiles held RIGHT NOW, and conquest means that number
-      // can fall while you sleep. Said out loud on the board itself, because
-      // a score that drops with no explanation reads as a bug.
-      subtitle: 'Casillas que tienes ahora. Cualquiera puede quitártelas corriendo por ahí.',
-      // Board 2 lives behind a toggle on this same tab — es OTRA tabla, no
-      // otra vista de la misma. Mezclarlas haría que dos números que no se
-      // comparan parecieran un solo ranking.
-      boardTerritory: 'Territorio',
-      boardLegends: 'Constancia',
-      legendsExplainer:
-        'Gana quien viene más días en los últimos %{days} — no quien corre más lejos. Un día cuenta igual sin importar la distancia.',
-      areasEmpty: 'Todavía no hay zonas.\nCierra un circuito corriendo y ponle nombre al terminar.',
-      legendsEmpty: 'Nadie ha venido aquí en los últimos 30 días.',
-      legendDays: {
-        one: '1 día',
-        other: '%{count} días',
+      // EL DISTRITO. Un rótulo, no un control — no hay nada que escoger, es
+      // donde estás. `arenaHere` es el respaldo donde no hay datos de
+      // parques (casi todo el planeta): la forma en el mapa es la identidad,
+      // y por eso ya no se le pone nombre a nada.
+      arenaKicker: 'TU DISTRITO',
+      arenaHere: 'Donde estás',
+      needLocation: 'Necesitamos tu ubicación para saber en qué distrito compites.',
+      locating: 'Buscando tu ubicación…',
+      locationUnavailable: 'Este dispositivo no puede darnos una ubicación.',
+      enableLocation: 'Permitir ubicación',
+      // Dos frases, no una: 0/0 no es 0%. Un distrito sin datos de parques
+      // no puede decirle a alguien que acaba de cubrir su colonia que no
+      // tiene nada.
+      heroClaimedShare: 'del terreno tomado en este distrito es tuyo',
+      rankOf: 'Lugar %{rank} de %{total}',
+      unranked: 'Sin territorio aquí',
+      // El número que une las dos tablas: la tienes, pero alguien viene más
+      // seguido. Ver contestedCells.
+      contested: {
+        one: '1 casilla en disputa',
+        other: '%{count} casillas en disputa',
       } as PluralForm,
-      areaTiles: {
+      frontier: '%{pct} de este distrito ya está tomado. El resto está libre.',
+      // Tabla 1. Cada sección dice qué mide — así las dos caben en una sola
+      // pantalla sin que dos números que no se comparan parezcan un ranking.
+      conquestTitle: 'CONQUISTA · AHORA MISMO',
+      conquestNote:
+        'Terreno que cada quien tiene en este momento. Cualquiera te lo quita corriendo por ahí.',
+      conquestEmpty: 'Nadie ha conquistado nada por aquí. Sé el primero.',
+      // Tabla 2 — mayorship sobre el terreno al que vuelves. Un día cuenta
+      // igual sin importar la distancia, así que nadie compra el título con
+      // un domingo enorme.
+      leadersTitle: 'LÍDERES LOCALES · %{days} DÍAS',
+      leadersNote:
+        'Gana quien viene más días, no quien corre más lejos. Un empate se queda con quien ya lo tenía.',
+      leadersEmpty: 'Nadie ha venido por aquí en los últimos %{days} días.',
+      cellsDetail: {
         one: '1 casilla',
         other: '%{count} casillas',
       } as PluralForm,
-      empty: 'Nadie ha conquistado territorio todavía.\nSé el primero.',
-      emptyRegion:
-        'Nadie ha conquistado territorio en %{city} todavía.\nSé el primero — o mira la tabla global.',
+      bestDays: {
+        one: 'mejor casilla: 1 día',
+        other: 'mejor casilla: %{count} días',
+      } as PluralForm,
       error: 'No pudimos cargar la tabla. Revisa tu conexión.',
       disabled: 'El guardado en línea no está configurado en esta versión.',
     },
@@ -747,15 +746,6 @@ const translations = {
         other: '%{count} tiles stay with runners who were there more recently',
       } as PluralForm,
       claimTooOld: 'This session was uploaded too late to compete for territory. It is saved to your history.',
-      areaPromptTitle: 'Name this area?',
-      areaPromptBody:
-        'Anyone can compete here. It goes to whoever shows up on the most days in the last 30 — not whoever runs furthest. The name and shape are permanent.',
-      areaPromptPlaceholder: 'A park, a block, your loop…',
-      areaPromptSave: 'Create area',
-      areaPromptSaving: 'Creating…',
-      areaPromptSkip: 'Not now',
-      areaPromptCreated: 'Area created. Come back tomorrow to defend it.',
-      areaPromptFailed: "We couldn't create the area. You can try again.",
       tiles: 'Tiles',
       tilesHeld: 'You now hold %{count} tiles in %{region}.',
       tilesUnavailable: "We couldn't confirm your tiles this time — your run is still saved.",
@@ -765,7 +755,6 @@ const translations = {
       soonTitle: 'Coming soon',
       soonBody:
         "This is where you'll see who holds the most territory. For now, go run and build yours — it all counts once the board opens.",
-      global: 'Global',
       anonymous: 'Anonymous',
       // See the ES entries' comment: unchanged, no longer rendered.
       runs: {
@@ -776,32 +765,41 @@ const translations = {
         one: '1 flagged session',
         other: '%{count} flagged sessions',
       } as PluralForm,
-      tiles: {
-        one: '1 tile',
-        other: '%{count} tiles',
-      } as PluralForm,
       flaggedTiles: {
         one: '1 tile from a flagged run',
         other: '%{count} tiles from flagged runs',
       } as PluralForm,
-      subtitle: 'Tiles you hold right now. Anyone can take them by running there.',
-      boardTerritory: 'Territory',
-      boardLegends: 'Regulars',
-      legendsExplainer:
-        'This goes to whoever shows up on the most days in the last %{days} — not whoever runs furthest. A day counts the same however far you went.',
-      areasEmpty: 'No areas yet.\nClose a loop on a run and name it when you finish.',
-      legendsEmpty: 'Nobody has been here in the last 30 days.',
-      legendDays: {
-        one: '1 day',
-        other: '%{count} days',
+      // See the ES entries' comments.
+      arenaKicker: 'YOUR DISTRICT',
+      arenaHere: 'Where you are',
+      needLocation: 'We need your location to know which district you are competing in.',
+      locating: 'Finding your location…',
+      locationUnavailable: 'This device cannot give us a location.',
+      enableLocation: 'Allow location',
+      heroClaimedShare: 'of the claimed ground in this district is yours',
+      rankOf: '%{rank} of %{total}',
+      unranked: 'No ground here yet',
+      contested: {
+        one: '1 cell contested',
+        other: '%{count} cells contested',
       } as PluralForm,
-      areaTiles: {
-        one: '1 tile',
-        other: '%{count} tiles',
+      frontier: '%{pct} of this district has been claimed. The rest is open.',
+      conquestTitle: 'CONQUEST · RIGHT NOW',
+      conquestNote:
+        'Ground each runner holds at this moment. Anyone can take it by running there.',
+      conquestEmpty: 'Nobody holds ground around here. Be the first.',
+      leadersTitle: 'LOCAL LEADERS · %{days} DAYS',
+      leadersNote:
+        'This goes to whoever shows up on the most days, not whoever runs furthest. A tie stays with whoever held it first.',
+      leadersEmpty: 'Nobody has run around here in the last %{days} days.',
+      cellsDetail: {
+        one: '1 cell',
+        other: '%{count} cells',
       } as PluralForm,
-      empty: 'Nobody has captured territory yet.\nBe the first.',
-      emptyRegion:
-        'Nobody has captured territory in %{city} yet.\nBe the first — or check the global board.',
+      bestDays: {
+        one: 'best cell: 1 day',
+        other: 'best cell: %{count} days',
+      } as PluralForm,
       error: "We couldn't load the board. Check your connection.",
       disabled: 'Online saving is not configured in this build.',
     },

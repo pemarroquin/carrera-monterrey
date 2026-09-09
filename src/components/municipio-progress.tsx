@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing, type ThemeColor } from '@/constants/theme';
-import { fetchMunicipioProgress, type MunicipioProgress } from '@/lib/areas';
+import { fetchMunicipioProgress, type MunicipioProgress } from '@/lib/progress';
 import { useI18n } from '@/lib/i18n';
 
 type State = { status: 'loading' } | { status: 'error' } | { status: 'ready'; rows: MunicipioProgress[] };
