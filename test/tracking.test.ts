@@ -10,7 +10,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeoFix } from '../src/lib/geolocation.web';
-import { requestPermission, watch } from '../src/lib/geolocation.web';
+import {
+  getPermissionState,
+  onPermissionStateChange,
+  requestPermission,
+  watch,
+} from '../src/lib/geolocation.web';
 import { shouldAcceptFix } from '../src/lib/tracking';
 
 describe('shouldAcceptFix', () => {
@@ -333,5 +338,93 @@ describe('geolocation.web requestPermission() probe', () => {
     fakeGeo.triggerCurrentError(makeError(1)); // PERMISSION_DENIED
 
     expect(await resultPromise).toBe('denied');
+  });
+});
+
+// getPermissionState() — the read the Location settings screen renders from,
+// and the reason it exists: expo-location's web shim reports
+// `canAskAgain: true` in EVERY branch, including denied. The screen believed
+// it, offered "Enable location", and the request path then returned DENIED
+// without ever calling getCurrentPosition. No prompt, no error, nothing on
+// screen. These pin the distinction the shim collapses.
+describe('getPermissionState', () => {
+  const query = (state: string) => vi.fn().mockResolvedValue({ state });
+
+  it('reports granted', async () => {
+    vi.stubGlobal('navigator', { geolocation: {}, permissions: { query: query('granted') } });
+    expect(await getPermissionState()).toBe('granted');
+  });
+
+  it('reports a DISMISSED prompt as askable — the case the button is for', async () => {
+    vi.stubGlobal('navigator', { geolocation: {}, permissions: { query: query('prompt') } });
+    expect(await getPermissionState()).toBe('askable');
+  });
+
+  it('reports an explicit block as blocked, NOT as askable', async () => {
+    // The exact lie the shim told. Getting this wrong puts a button on
+    // screen that cannot do anything.
+    vi.stubGlobal('navigator', { geolocation: {}, permissions: { query: query('denied') } });
+    expect(await getPermissionState()).toBe('blocked');
+  });
+
+  it('falls back to askable when the Permissions API is missing', async () => {
+    // Geolocation still works; we simply cannot read the state without
+    // prompting, and trying is what is available.
+    vi.stubGlobal('navigator', { geolocation: {} });
+    expect(await getPermissionState()).toBe('askable');
+  });
+
+  it('falls back to askable when the query itself throws (older Safari)', async () => {
+    vi.stubGlobal('navigator', {
+      geolocation: {},
+      permissions: { query: vi.fn().mockRejectedValue(new TypeError('unsupported')) },
+    });
+    expect(await getPermissionState()).toBe('askable');
+  });
+
+  it('reports unknown when there is no geolocation provider at all', async () => {
+    // Never 'blocked': claiming a denial nobody made is what the status dot
+    // would paint red.
+    vi.stubGlobal('navigator', {});
+    expect(await getPermissionState()).toBe('unknown');
+  });
+
+  it('never probes for position — a status read must not raise the prompt', async () => {
+    const getCurrentPosition = vi.fn();
+    vi.stubGlobal('navigator', {
+      geolocation: { getCurrentPosition },
+      permissions: { query: query('prompt') },
+    });
+    await getPermissionState();
+    expect(getCurrentPosition).not.toHaveBeenCalled();
+  });
+});
+
+describe('onPermissionStateChange', () => {
+  it('reports the browser unblocking the site, which happens off-page', async () => {
+    // The unblock is done in the browser's own site settings with this page
+    // still open — no focus change, no reload. Without this the screen keeps
+    // saying "Blocked" after the runner has just fixed it.
+    const listeners: (() => void)[] = [];
+    const status = {
+      state: 'granted',
+      addEventListener: (_: string, cb: () => void) => listeners.push(cb),
+      removeEventListener: () => {},
+    };
+    vi.stubGlobal('navigator', {
+      geolocation: {},
+      permissions: { query: vi.fn().mockResolvedValue(status) },
+    });
+    const seen: string[] = [];
+    onPermissionStateChange((next) => seen.push(next));
+    await Promise.resolve();
+    await Promise.resolve();
+    for (const fire of listeners) fire();
+    expect(seen).toEqual(['granted']);
+  });
+
+  it('is a no-op without the Permissions API rather than throwing', () => {
+    vi.stubGlobal('navigator', { geolocation: {} });
+    expect(() => onPermissionStateChange(() => {})()).not.toThrow();
   });
 });

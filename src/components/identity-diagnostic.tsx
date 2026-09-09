@@ -119,7 +119,10 @@ export function IdentityDiagnostic({ c }: { c: Record<ThemeColor, string> }) {
 
   return (
     <View style={styles.block}>
-      <Text style={[styles.title, { color: c.text }]}>{t('settings.diagnosticTitle')}</Text>
+      {/* No title of its own any more: this is a SECTION of the Profile page
+          (2026-09-09) and that page supplies the heading, from the same
+          `settings.diagnosticTitle` key. Rendering both put the word
+          "Diagnostics" on screen twice, in two different type scales. */}
       <Text style={[styles.hint, { color: c.textSecondary }]}>{t('settings.diagnosticBody')}</Text>
 
       <Row label={t('settings.diagnosticSession')} c={c}>
@@ -191,7 +194,6 @@ function Row({
 
 const styles = StyleSheet.create({
   block: { gap: Spacing.one, marginTop: Spacing.three },
-  title: { fontSize: 13, fontWeight: '700' },
   hint: { fontSize: 12, lineHeight: 17, marginBottom: Spacing.one },
   row: { gap: 1 },
   label: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },

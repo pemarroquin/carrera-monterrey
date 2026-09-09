@@ -67,14 +67,6 @@ export default function SettingsIndexScreen() {
               hint={t('settings.navProfileHint')}
               c={c}
             />
-            <NavRow
-              href="/settings/account"
-              ios="envelope"
-              android="mail"
-              label={t('settings.accountTitle')}
-              hint={t('settings.navAccountHint')}
-              c={c}
-            />
             {/* The permanent personal record, deliberately here rather than
                 on the live map: under conquest that map shows what you hold
                 RIGHT NOW and can fall while you sleep, so "everywhere I have

@@ -1,13 +1,14 @@
-// Settings' account-linking form — the whole content of the
-// Settings › Your account sub-page (src/app/(tabs)/settings/account.tsx).
-// See src/lib/account.ts's header for why this exists and what LINK vs
-// SIGN IN mean; this component only owns the two-step (email -> code) form
-// and the states around it.
+// Settings' account-linking form — the "Your account" section of
+// Settings › Profile (src/app/(tabs)/settings/profile.tsx). It had a page to
+// itself until 2026-09-09; that page is gone and the three identity
+// surfaces sit on one screen. See src/lib/account.ts's header for why this
+// exists and what LINK vs SIGN IN mean; this component only owns the
+// two-step (email -> code) form and the states around it.
 //
-// It renders no heading of its own: the page it now owns carries the
-// `settings.accountTitle` string in its stack header. When it lived inside
-// the old one-scroll settings screen it had to title itself, since nothing
-// else did.
+// It renders no heading of its own — its Section supplies one, from the
+// same `settings.accountTitle` key that used to be the page's stack title.
+// When it lived inside the old one-scroll settings screen it had to title
+// itself, since nothing else did.
 //
 // Self-contained like NamePrompt: fetches its own status on mount/focus and
 // decides everything about what to show. The host only decides WHERE to

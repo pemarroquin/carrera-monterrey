@@ -29,6 +29,9 @@ import {
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { cellsToMultiPolygon } from 'h3-js';
+import type { MultiPolygon, Polygon } from 'geojson';
+
 import { RaceCard } from '@/components/race-card';
 import { MunicipioProgressList } from '@/components/municipio-progress';
 import { TerritoriesMap, type TerritoryFeature } from '@/components/territories-map';
@@ -38,11 +41,15 @@ import { useI18n } from '@/lib/i18n';
 import { daysUntil, type Race } from '@/lib/races';
 import { useRaces } from '@/lib/races-provider';
 import { onIdentityChanged } from '@/lib/auth-events';
+import { groundOfRun } from '@/lib/enclosure';
+import { DEFAULT_TILE_RES, pathToTiles, tilesAreaM2 } from '@/lib/tiles';
 import { onRunSaved, notifyRunSaved } from '@/lib/save-events';
 import { useSaved } from '@/lib/saved';
 import {
   deleteRun,
   fetchMyFences,
+  fetchMyVisitedCells,
+  type RunCells,
   uploadRun,
   type DeleteOutcome,
   type FencesOutcome,
@@ -134,6 +141,13 @@ export default function MyRacesScreen() {
   // fake "no territory yet" — same `isFocused` gate index.tsx's queue-drain
   // effect uses, not a new abstraction.
   const [fences, setFences] = useState<FencesOutcome | null>(null);
+  // Each run's own covered cells, so a saved run can be DRAWN as the tiles
+  // it took rather than as its fence polygon — the unit the game actually
+  // scores. Fetched alongside `fences` and deliberately not folded into
+  // fetchMyFences: that reads `runs`, this pages `tile_visits`, and a
+  // failure of the second must not blank the first. Null means "not loaded
+  // or failed", which the view falls back on rather than drawing nothing.
+  const [runCells, setRunCells] = useState<RunCells[] | null>(null);
   // The offline retry queue — local, synchronous (see upload-queue.ts), so
   // this is a plain read rather than a fetch. Refreshed on the same
   // trigger as `fences` so a run that finishes uploading in the background
@@ -178,6 +192,9 @@ export default function MyRacesScreen() {
       fetchMyFences().then((outcome) => {
         if (!stale) setFences(outcome);
       });
+      fetchMyVisitedCells().then((outcome) => {
+        if (!stale) setRunCells(outcome.ok ? outcome.runs : null);
+      });
     }, 0);
     return () => {
       stale = true;
@@ -193,8 +210,9 @@ export default function MyRacesScreen() {
   const onRefreshFences = useCallback(async () => {
     setFencesRefreshing(true);
     refreshQueued();
-    const outcome = await fetchMyFences();
+    const [outcome, cells] = await Promise.all([fetchMyFences(), fetchMyVisitedCells()]);
     setFences(outcome);
+    setRunCells(cells.ok ? cells.runs : null);
     setFencesRefreshing(false);
   }, [refreshQueued]);
 
@@ -295,6 +313,7 @@ export default function MyRacesScreen() {
       ) : (
         <FencesView
           fences={fences}
+          runCells={runCells}
           queued={queued}
           refreshing={fencesRefreshing}
           onRefresh={onRefreshFences}
@@ -310,6 +329,7 @@ export default function MyRacesScreen() {
 
 function FencesView({
   fences,
+  runCells,
   queued,
   refreshing,
   onRefresh,
@@ -319,6 +339,7 @@ function FencesView({
   scheme,
 }: {
   fences: FencesOutcome | null;
+  runCells: RunCells[] | null;
   queued: QueuedRun[];
   refreshing: boolean;
   onRefresh: () => void;
@@ -362,28 +383,64 @@ function FencesView({
     );
   }
 
-  // Only what a map can actually draw — a fully-taken run (geometry null,
-  // see MyFence's own doc comment) has no shape left, so there is nothing
-  // to render or tap. Real history either way; simply not representable on
-  // THIS surface. (The old card list showed a metadata-only card for these;
-  // this redesign trades that for "a single map view" per Pedro's ask —
-  // known, deliberate scope reduction, not an oversight.)
+  // A run is drawn as THE TILES IT TOOK, by the same rule the live Track map
+  // and "Where you've run" use: cells crossed plus the interior of any loop
+  // it closed. The tile is what the game scores — the leaderboard, conquest
+  // and both boards are counted in tiles — while `fence` is the outline of
+  // the path, and the two can disagree badly. Measured 2026-09-09: run
+  // e058a4c9 covered 204 tiles over 5.8 km and had a fence area of 1 155 m²,
+  // because it never closed a loop and buildFence had nothing to enclose.
+  // That run drew a sliver on this screen.
+  //
+  // The fence stays as the FALLBACK, not as dead code. claim_run_tiles
+  // raises CLAIM_TOO_OLD (and CLAIM_IMPLAUSIBLE) before its
+  // `insert into tile_visits`, so a run rejected there has a fence row and
+  // no tiles at all; so does any run at all if the tile_visits page fails
+  // while the `runs` read succeeds. Drawing nothing for those would be the
+  // silent-empty failure this codebase keeps having to fix. No run is in
+  // that state in production today (12 of 12 have tiles, checked
+  // 2026-09-09) — which is exactly why it needs writing down.
+  const cellsByRun = new Map((runCells ?? []).map(({ runId, cells }) => [runId, cells]));
   const savedFeatures: TerritoryFeature[] = fences.fences
+    .map((f) => {
+      const cells = cellsByRun.get(f.id);
+      const geometry: Polygon | MultiPolygon | null = cells?.length
+        ? {
+            type: 'MultiPolygon',
+            coordinates: cellsToMultiPolygon(groundOfRun(cells, DEFAULT_TILE_RES), true),
+          }
+        : f.geometry;
+      return { fence: f, geometry };
+    })
+    // A fully-overtaken run with no tiles has no shape left, so there is
+    // nothing to render or tap. Real history either way; simply not
+    // representable on THIS surface. (The old card list showed a
+    // metadata-only card for these; this redesign trades that for "a single
+    // map view" per Pedro's ask — known, deliberate scope reduction.)
     .filter((f) => f.geometry !== null)
-    .map((f) => ({
-      id: f.id,
+    .map(({ fence, geometry }) => ({
+      id: fence.id,
       kind: 'saved' as const,
-      geometry: f.geometry!,
-      route: f.route,
-      startedAtMs: f.startedAtMs,
+      geometry: geometry!,
+      route: fence.route,
+      startedAtMs: fence.startedAtMs,
     }));
-  const pendingFeatures: TerritoryFeature[] = queued.map((q) => ({
-    id: q.id,
-    kind: 'pending' as const,
-    geometry: q.run.fence.geometry.geometry,
-    route: q.run.points,
-    startedAtMs: q.run.startedAt,
-  }));
+  // A queued run has no server tiles — it has not uploaded — so its cells are
+  // computed here from the points it recorded, the same call uploadRun makes.
+  // Without this the same run visibly CHANGES SHAPE the moment it uploads,
+  // at exactly the moment the runner is watching it.
+  const pendingFeatures: TerritoryFeature[] = queued.map((q) => {
+    const cells = groundOfRun(pathToTiles(q.run.points).cells, DEFAULT_TILE_RES);
+    return {
+      id: q.id,
+      kind: 'pending' as const,
+      geometry: cells.length
+        ? ({ type: 'MultiPolygon', coordinates: cellsToMultiPolygon(cells, true) } as MultiPolygon)
+        : q.run.fence.geometry.geometry,
+      route: q.run.points,
+      startedAtMs: q.run.startedAt,
+    };
+  });
   const features = [...savedFeatures, ...pendingFeatures];
 
   const selectedFence =
@@ -412,6 +469,7 @@ function FencesView({
         <DetailCard
           fence={selectedFence}
           queued={selectedQueued}
+          cells={selection ? cellsByRun.get(selection.id) : undefined}
           locale={locale}
           scheme={scheme}
           onClose={() => onSelect(null)}
@@ -425,6 +483,7 @@ function FencesView({
 function DetailCard({
   fence,
   queued,
+  cells,
   locale,
   scheme,
   onClose,
@@ -432,6 +491,8 @@ function DetailCard({
 }: {
   fence?: MyFence;
   queued?: QueuedRun;
+  /** This run's covered cells, when the map above is drawing them. */
+  cells?: string[];
   locale: string;
   scheme: 'dark' | 'light';
   onClose: () => void;
@@ -447,7 +508,21 @@ function DetailCard({
   const [retryFailure, setRetryFailure] = useState<SyncOutcome | null>(null);
 
   const startedAtMs = fence?.startedAtMs ?? queued?.run.startedAt ?? 0;
-  const areaM2 = fence?.areaM2 ?? queued?.run.fence.areaM2 ?? 0;
+  // Measured from the SAME tiles the map draws, whenever it is drawing
+  // tiles. `runs.area_m2` is the area of the fence polygon, which for a run
+  // that never closed a loop is close to nothing however much ground the run
+  // covered — e058a4c9, a real 5.8 km run, stores 1 155 m² against 204
+  // tiles. A caption from one source beside a shape from another is how a
+  // screen ends up arguing with itself, so the caption follows the shape and
+  // falls back with it.
+  const tiled = cells?.length
+    ? groundOfRun(cells, DEFAULT_TILE_RES)
+    : queued
+      ? groundOfRun(pathToTiles(queued.run.points).cells, DEFAULT_TILE_RES)
+      : [];
+  const areaM2 = tiled.length
+    ? tilesAreaM2(tiled)
+    : (fence?.areaM2 ?? queued?.run.fence.areaM2 ?? 0);
   const distanceM = fence?.distanceM ?? queued?.run.distanceM ?? 0;
   const date = new Date(startedAtMs).toLocaleDateString(locale === 'es' ? 'es-MX' : 'en-US', {
     day: 'numeric',

@@ -458,7 +458,11 @@ const translations = {
         'Sin este permiso no podemos trazar tus recorridos ni conquistar territorio.',
       locationEnable: 'Activar ubicación',
       locationOpenSettings: 'Abrir ajustes del teléfono',
-      locationBrowserBlocked: 'Desbloquea la ubicación en tu navegador',
+      // Sustituye a locationBrowserBlocked, que era la etiqueta de un botón
+      // que no podía funcionar: ningún navegador vuelve a abrir un permiso
+      // que ya bloqueaste. Es una instrucción, no un control.
+      locationBrowserBlockedHint:
+        'Tu navegador bloquea la ubicación en este sitio y solo tu navegador puede desbloquearla. Abre los ajustes del sitio, junto a la barra de direcciones, y permite Ubicación. Esta pantalla se actualiza sola.',
       reminders: 'Recordatorios',
       remindersHint:
         'Te avisamos 3 días antes y la noche anterior de cada carrera que guardes.',
@@ -470,20 +474,26 @@ const translations = {
       zoneSetHere: 'Usar mi ubicación',
       zoneRemove: 'Quitar',
       zoneSetting: 'Guardando…',
+      // El estado ya lo dice el indicador de la fila (Status en
+      // location.tsx), así que la explicación ya no empieza por
+      // "Activada." — decirlo dos veces en la misma tarjeta hacía que el
+      // texto pareciera la única señal de que estaba encendida.
+      zoneOn: 'Activada',
+      zoneOff: 'Sin poner',
       zoneOnHint:
-        'Activada. Recortamos los primeros y últimos %{m} m de cada sesión antes de subirla, con un margen aleatorio para que no se pueda deducir el centro. El punto se queda en este teléfono: nunca se sube.',
+        'Recortamos los primeros y últimos %{m} m de cada sesión antes de subirla, con un margen aleatorio para que no se pueda deducir el centro. El punto se queda en este teléfono: nunca se sube.',
       zoneOffHint:
         'Sin zona privada, el inicio y el final exactos de tus sesiones se suben y cualquier persona que use la app puede verlos. Ponla donde vives.',
       zoneFailed: 'No pudimos guardar tu zona. Revisa el permiso de ubicación e inténtalo otra vez.',
       // Settings › Dónde has corrido. El registro personal permanente — el
       // contrapeso a un mapa que bajo conquista muestra solo lo que tienes
       // AHORA. Aquí no te lo puede quitar nadie.
-      historyTitle: 'Dónde has corrido',
-      historyNavHint: 'Todo el terreno que has pisado. Nadie te lo quita.',
+      historyTitle: 'Terreno que has tomado',
+      historyNavHint: 'Todo lo que has corrido y todo lo que has cerrado. Nadie te lo quita.',
       historyHint: {
-        one: 'Has pisado 1 casilla. Esto no cambia aunque alguien te gane el territorio.',
+        one: '1 casilla, contada como la cuenta una sesión: el terreno que pisaste más lo que rodeaste al cerrar una vuelta. Nadie te la quita de este mapa.',
         other:
-          'Has pisado %{count} casillas. Esto no cambia aunque alguien te gane el territorio.',
+          '%{count} casillas, contadas como las cuenta una sesión: el terreno que pisaste más lo que rodeaste al cerrar una vuelta. Nadie te las quita de este mapa.',
       } as PluralForm,
       historyEmpty: 'Todavía no has guardado ninguna sesión.',
       historyFailed: 'No pudimos cargar tu historial. Revisa tu conexión.',
@@ -522,13 +532,13 @@ const translations = {
       // and the one-line description under each row.
       groupAccount: 'Cuenta',
       groupApp: 'Aplicación',
-      navProfileHint: 'Tu nombre en la tabla de posiciones',
-      navAccountHint: 'Vincula tu correo para no perder tu territorio',
+      navProfileHint: 'Tu cuenta, tu diagnóstico y tu nombre en la tabla',
       navPreferencesHint: 'Apariencia, idioma y recordatorios',
       navLocationHint: 'Permiso de ubicación y tu zona privada',
       navPrivacyHint: 'Qué recopilamos y qué no',
       navAboutHint: 'Versión y soporte',
       accountTitle: 'Tu cuenta',
+      sectionLeaderboard: 'Tabla de posiciones',
       accountBody:
         'Este dispositivo tiene una cuenta anónima para guardar tus territorios. Si cambias de navegador, de dispositivo o se borran los datos del sitio, esa cuenta —y el territorio que tenga guardado— deja de aparecer. Agrega tu correo para que tu progreso te siga a donde entres.',
       accountEmailPlaceholder: 'tu@correo.com',
@@ -942,7 +952,11 @@ const translations = {
         "Without this permission we can't trace your runs or capture territory.",
       locationEnable: 'Enable location',
       locationOpenSettings: 'Open phone settings',
-      locationBrowserBlocked: 'Unblock location in your browser',
+      // Replaces locationBrowserBlocked, which was the label on a button
+      // that could not work: no browser will re-open a permission you have
+      // already blocked. This is an instruction, not a control.
+      locationBrowserBlockedHint:
+        'Your browser is blocking location for this site, and only your browser can undo it. Open the site settings next to the address bar and allow Location. This screen updates on its own.',
       reminders: 'Reminders',
       remindersHint:
         'We’ll remind you 3 days before and the night before each race you save.',
@@ -954,16 +968,23 @@ const translations = {
       zoneSetHere: 'Use my location',
       zoneRemove: 'Remove',
       zoneSetting: 'Saving…',
+      // The row's own status indicator says whether it is on now (Status in
+      // location.tsx), so the explanation no longer opens with "On." —
+      // saying it twice in one block was what made the prose look like the
+      // only signal that it was on at all.
+      zoneOn: 'On',
+      zoneOff: 'Not set',
       zoneOnHint:
-        'On. We trim the first and last %{m} m of every session before uploading it, with a random margin so the centre can\u2019t be worked out. The point stays on this phone \u2014 it is never uploaded.',
+        'We trim the first and last %{m} m of every session before uploading it, with a random margin so the centre can\u2019t be worked out. The point stays on this phone \u2014 it is never uploaded.',
       zoneOffHint:
         'Without a privacy zone, the exact start and end of your sessions are uploaded and visible to anyone using the app. Set it where you live.',
       zoneFailed: "We couldn\u2019t save your zone. Check location permission and try again.",
-      historyTitle: "Where you've run",
-      historyNavHint: "Every piece of ground you've covered. Nobody can take it.",
+      historyTitle: 'Ground you have taken',
+      historyNavHint: "Everywhere you've run and everything you've closed. Nobody can take it.",
       historyHint: {
-        one: "You've covered 1 tile. This doesn't change when someone takes territory from you.",
-        other: "You've covered %{count} tiles. This doesn't change when someone takes territory from you.",
+        one: '1 tile, counted the same way a run counts it — ground you crossed plus anything you ran a loop around. Nobody can take it off this map.',
+        other:
+          '%{count} tiles, counted the same way a run counts them — ground you crossed plus anything you ran a loop around. Nobody can take them off this map.',
       } as PluralForm,
       historyEmpty: "You haven't saved a session yet.",
       historyFailed: "We couldn't load your history. Check your connection.",
@@ -990,13 +1011,13 @@ const translations = {
       // themselves have no new keys.
       groupAccount: 'Account',
       groupApp: 'App',
-      navProfileHint: 'Your name on the leaderboard',
-      navAccountHint: 'Link your email so you keep your territory',
+      navProfileHint: 'Your account, its diagnostics, and your leaderboard name',
       navPreferencesHint: 'Appearance, language and reminders',
       navLocationHint: 'Location permission and your privacy zone',
       navPrivacyHint: 'What we collect and what we don’t',
       navAboutHint: 'Version and support',
       accountTitle: 'Your account',
+      sectionLeaderboard: 'Leaderboard',
       accountBody:
         "This device has an anonymous account for saving your territories. Switch browsers or devices, or clear site data, and that account — and any territory it holds — stops showing up. Add your email so your progress follows you wherever you sign in.",
       accountEmailPlaceholder: 'you@email.com',

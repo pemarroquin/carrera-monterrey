@@ -18,7 +18,7 @@ vi.mock('@/lib/supabase', () => ({
   TERRITORY_ENABLED: false,
 }));
 
-const { parseRawPath } = await import('@/lib/territory-sync');
+const { groupVisitsByRun, parseRawPath } = await import('@/lib/territory-sync');
 
 describe('parseRawPath', () => {
   it('parses valid [lat, lng, ts] triples into LatLng points', () => {
@@ -71,5 +71,74 @@ describe('parseRawPath', () => {
 
   it('ignores a missing/non-numeric timestamp — only lat/lng are used', () => {
     expect(parseRawPath([[25.67, -100.31]])).toEqual([{ lat: 25.67, lng: -100.31 }]);
+  });
+});
+
+// groupVisitsByRun — the shape "Where you've run" needs in order to apply
+// enclosure PER RUN (the same rule a live session uses) rather than across
+// the union of a runner's whole history. Every failure here is silent: two
+// runs merged would enclose ground neither surrounded, a surviving res-11
+// row would dissolve the set into nonsense rings.
+describe('groupVisitsByRun', () => {
+  // Real H3 indexes over Monterrey, not hand-written strings: isCurrentTileRes
+  // calls h3-js's getResolution, which rejects anything that is not a valid
+  // index — a made-up literal silently filters out and every assertion here
+  // would pass against an empty result.
+  // res 12, the resolution the app claims at.
+  const A = '8c48a2062d835ff';
+  const B = '8c48a2062d823ff';
+  const C = '8c48a2062d9c9ff';
+  // res 11, the pre-2026-09-07 resolution.
+  const OLD = '8b48a2062d83fff';
+
+  it('groups cells by run rather than flattening them', () => {
+    const runs = groupVisitsByRun([
+      { h3: A, run_id: 'r1' },
+      { h3: B, run_id: 'r2' },
+      { h3: C, run_id: 'r1' },
+    ]);
+    expect(runs).toHaveLength(2);
+    expect(runs.map((r) => ({ runId: r.runId, cells: [...r.cells].sort() }))).toEqual(
+      expect.arrayContaining([
+        { runId: 'r1', cells: [A, C].sort() },
+        { runId: 'r2', cells: [B] },
+      ]),
+    );
+  });
+
+  it('deduplicates a cell within one run — an out-and-back logs it twice', () => {
+    expect(groupVisitsByRun([
+      { h3: A, run_id: 'r1' },
+      { h3: A, run_id: 'r1' },
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
+  });
+
+  it('keeps a cell separately per run, because each run encloses on its own', () => {
+    const runs = groupVisitsByRun([
+      { h3: A, run_id: 'r1' },
+      { h3: A, run_id: 'r2' },
+    ]);
+    expect(runs).toEqual([
+      { runId: 'r1', cells: [A] },
+      { runId: 'r2', cells: [A] },
+    ]);
+  });
+
+  it('drops cells at the old resolution instead of mixing two grids', () => {
+    expect(groupVisitsByRun([
+      { h3: A, run_id: 'r1' },
+      { h3: OLD, run_id: 'r1' },
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
+  });
+
+  it('omits a run entirely when every one of its cells was the old resolution', () => {
+    expect(groupVisitsByRun([
+      { h3: A, run_id: 'r1' },
+      { h3: OLD, run_id: 'r2' },
+    ])).toEqual([{ runId: 'r1', cells: [A] }]);
+  });
+
+  it('returns no runs for no rows, rather than one empty run', () => {
+    expect(groupVisitsByRun([])).toEqual([]);
   });
 });

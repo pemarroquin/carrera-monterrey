@@ -5,7 +5,13 @@
 import { gridDisk, gridRingUnsafe, latLngToCell } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 
-import { MAX_NOISE_HOLE_CELLS, enclosedCells, holesOf, noiseHoles } from '@/lib/enclosure';
+import {
+  MAX_NOISE_HOLE_CELLS,
+  enclosedCells,
+  groundOfRun,
+  holesOf,
+  noiseHoles,
+} from '@/lib/enclosure';
 import { DEFAULT_TILE_RES, pathToTiles, type TilePoint } from '@/lib/tiles';
 
 const CENTRE = latLngToCell(25.6866, -100.3161, DEFAULT_TILE_RES);
@@ -203,5 +209,41 @@ describe('holesOf', () => {
     expect(noiseHoles(cells, DEFAULT_TILE_RES).sort()).toEqual(
       all.filter((h) => h.length <= MAX_NOISE_HOLE_CELLS).flat().sort(),
     );
+  });
+});
+
+// groundOfRun — the ONE definition of "the ground one run took", shared by
+// the Saved tab (per run) and "Where you've run" (unioned over a history).
+// The reason it exists is drift: this dissolve pipeline had already been
+// written out three times before holesOf collapsed it (ef92d38), and
+// gap-policy.ts exists because two callers applied the caps themselves and
+// disagreed about a real gap.
+describe('groundOfRun', () => {
+  it('is the cells crossed plus the interior of the loop they close', () => {
+    const ring = gridRingUnsafe(CENTRE, 3);
+    expect(new Set(groundOfRun(ring, DEFAULT_TILE_RES))).toEqual(
+      new Set([...ring, ...gridDisk(CENTRE, 2)]),
+    );
+  });
+
+  it('adds nothing to a run that never closed a loop', () => {
+    // A straight line encloses nothing, so the ground is exactly the path.
+    const line = [CENTRE, ...gridRingUnsafe(CENTRE, 1).slice(0, 1)];
+    expect(new Set(groundOfRun(line, DEFAULT_TILE_RES))).toEqual(new Set(line));
+  });
+
+  it('accepts a duplicated cell instead of throwing, and counts it once', () => {
+    // cellsToMultiPolygon rejects duplicate input outright ("Duplicate
+    // input"), which unmounts the screen rather than drawing something
+    // slightly wrong. An out-and-back crosses the same cell twice, so a raw
+    // list of crossings is the obvious thing for a caller to hand this.
+    const ring = gridRingUnsafe(CENTRE, 3);
+    const ground = groundOfRun([...ring, ...ring], DEFAULT_TILE_RES);
+    expect(ground).toHaveLength(new Set(ground).size);
+    expect(new Set(ground)).toEqual(new Set([...ring, ...gridDisk(CENTRE, 2)]));
+  });
+
+  it('returns an empty array for no cells rather than throwing', () => {
+    expect(groundOfRun([], DEFAULT_TILE_RES)).toEqual([]);
   });
 });
