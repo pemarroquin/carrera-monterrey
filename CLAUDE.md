@@ -91,6 +91,70 @@ CI runs it on every pull request and every push to main
 - `_meta.count` is not read by the app, but it drifted to 114 against 195 real
   records because sweeps never touched it. The gate now checks it.
 
+## Territory Mode — the two boards
+
+Two leaderboards, and they measure different things on purpose. Do not merge
+them, and do not add a scope picker to either.
+
+**The arena is an H3 res-7 district** (`src/lib/district.ts`), ~5.16 km² and
+~2.8 km across — the ground you are standing in, resolved locally with no
+table, no migration and no round trip. It is NOT a municipio: nothing here
+can resolve a lat/lng to one, and deriving it from park cells was measured at
+21.3% ambiguous. This is the Pokémon GO / Ingress answer — the grid IS the
+region.
+
+`districtOf()` truncates the position's own tile; it must NEVER call
+`latLngToCell(lat, lng, 7)` directly. H3's hierarchy is index truncation, not
+geometry, so those differ near a boundary and a runner would be shown a
+district their own tiles fall outside of. Monterrey happens to agree either
+way, so this only shows up in other cities — a test asserts it across eight
+base cells worldwide.
+
+- **Board 1, CONQUEST** (`districtConquest`) — share of the ground *anyone
+  holds* in the district. Changes hands the moment somebody else runs there.
+  Ranked by cells held. The denominator is claimed ground, not the district's
+  own 16 807 cells: that was measured at 0.02-2.39% for every real runner and
+  never moves. How much of the district is untouched is a separate caption.
+- **Board 2, LOCAL LEADERS** (`src/lib/mayorship.ts`) — mayorship per CELL,
+  by distinct days present in a trailing 30. One point per day, so nobody
+  buys a title with one huge Sunday; ties hold with the incumbent. Cannot be
+  taken in a single visit.
+
+**Nothing is ever named.** User-created `areas` were deleted outright — the
+prompt, the overlap-suggest, the delete window, every string. Board 2's unit
+is the grid, so a park and "a street block near my house" work through the
+same code with no special case, and areas EMERGE from contiguous held cells.
+Do not revive `areas` in any form.
+
+**The leaderboard depends on no hand-applied migration, deliberately.** See
+`leaderboard.ts`'s header: a board reading 0% because nobody ran the SQL is
+indistinguishable from one reading 0% because nobody ran.
+
+## Gotchas this repo has actually shipped
+
+- **`park_path_cells` is EMPTY in production.** The schema migration ran; the
+  36,193-row data migration (`20260908211500_park_paths_data.sql`) never did.
+  So "Park-path progress per municipio" renders nothing — the RPC returns
+  `[]`, not an error. Apply it by hand. This is the standing failure mode
+  here: an unapplied migration reads as an honest `0`.
+- **A ref cannot wake an effect.** `track-map.web.tsx` gated eight effects on
+  a `readyRef`; two of them depended only on `active` and so never ran at all
+  when a session started before the map loaded — silently removing the
+  camera's browse hold. Readiness is state now. When gating an effect on
+  readiness, ask what re-runs it.
+- **`npm run measure-holes`** — read-only, anon key. Reports the size
+  distribution of holes in every runner's covered ground and what the shipped
+  `noiseHoles()` would fill. Run it before changing `MAX_NOISE_HOLE_CELLS`;
+  the cap sits in a measured gap (nothing between 3 cells / 56 m and 9 cells
+  / 110 m) and a different city could move it.
+- **`holesOf()` is the ONE hole pipeline.** `enclosedCells` is it flattened,
+  `noiseHoles` is it capped, `measure-holes` reports on it. Three copies
+  existed briefly; `gap-policy.ts` exists only because two places once
+  applied the same caps themselves and disagreed.
+- **Measure a denominator against production before shipping a percentage.**
+  Two denominators for one number were written down as decided and then
+  measured to be unusable. A percentage is a claim about a denominator.
+
 ## Project shape
 
 React Native + Expo (SDK 57, expo-router, TypeScript). `npx expo start`, then
