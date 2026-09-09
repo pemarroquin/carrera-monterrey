@@ -13,6 +13,7 @@ import { isReservedNickname } from '@/lib/nickname';
 import { setCachedDisplayName } from '@/lib/profile-cache';
 import { nearestRegion } from '@/lib/regions';
 import type { FenceResult, LatLng } from '@/lib/territory';
+import { districtCellPattern } from '@/lib/district';
 import { isCurrentTileRes, pathToTiles, tileResLikePattern } from '@/lib/tiles';
 import type { TrackPoint } from '@/lib/tracking';
 
@@ -783,7 +784,24 @@ export type TileLeaderboardOutcome =
  * pattern as fetchRunSpoils above: fetch the tiles, then fetch display names
  * for the distinct owner ids in one second query.
  */
-export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
+export async function fetchTileLeaderboard(
+  /**
+   * Restrict to one district's cells, filtered SERVER-SIDE by the H3 prefix.
+   *
+   * Added after review measured what the unscoped read costs: enclosure means
+   * a single 10 km loop claims ~26,000 tiles (see the paging comment below),
+   * so a few dozen runs is already dozens of sequential 1000-row round trips
+   * — on every tab focus and every pull-to-refresh — to answer a question
+   * about one 5 km² patch, with everything outside it then thrown away on
+   * device. The two other reads the leaderboard makes in the same
+   * Promise.all were already prefix-filtered for exactly this reason (see
+   * boards.ts); this one was not, which is the inconsistency.
+   *
+   * null keeps the old whole-table behaviour for any caller that really does
+   * want every tile.
+   */
+  district: string | null = null,
+): Promise<TileLeaderboardOutcome> {
   return withSession<{ tiles: TileOwnerRow[]; meUserId: string; skipped: number }>(async (session) => {
     // The embedded `runs` comes from territory_tiles.claim_run_id's FK to
     // runs.id — the only FK from this table to `runs`, so PostgREST can
@@ -801,7 +819,7 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
     // is why nobody noticed.
     const data: { h3: string; owner_id: string | null; region_id: string | null; runs: unknown }[] = [];
     for (let offset = 0; ; offset += 1000) {
-      const { data: page, error } = await supabase
+      let query = supabase
         .from('territory_tiles')
         // h3 is selected purely to filter on resolution — see the loop below.
         // A leaderboard that mixed resolutions would rank a runner with
@@ -811,8 +829,12 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
         // Ordered so paging is deterministic: without it Postgres may return
         // rows in a different order per page and offset paging can skip one.
         // h3 is the primary key, so it is unique and a total order.
-        .order('h3', { ascending: true })
-        .range(offset, offset + 999);
+        .order('h3', { ascending: true });
+      // Every res-12 descendant of a res-7 cell shares this prefix and no
+      // neighbouring district's do — see districtCellPattern, which is
+      // asserted against h3-js across eight base cells worldwide.
+      if (district !== null) query = query.like('h3', `${districtCellPattern(district)}%`);
+      const { data: page, error } = await query.range(offset, offset + 999);
       if (error || !page) return { ok: false, reason: 'network' };
       data.push(...page);
       if (page.length < 1000) break;

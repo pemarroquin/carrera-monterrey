@@ -4,7 +4,7 @@
 // park data must NOT render as 0%: that would tell a runner who just covered
 // their whole neighbourhood that they hold none of it. Everywhere outside
 // the seven extracted Nuevo León municipios is that case.
-import { latLngToCell } from 'h3-js';
+import { cellToChildrenSize, latLngToCell } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 
 import { districtOf } from '../src/lib/district';
@@ -35,24 +35,45 @@ describe('districtConquest', () => {
       DISTRICT,
       parkCells,
     );
-    expect(result.hasDenominator).toBe(true);
-    expect(result.parkCellTotal).toBe(4);
-    expect(result.entries[0]).toMatchObject({ userId: 'u1', parkCellsHeld: 2, share: 0.5 });
-    expect(result.entries[1]).toMatchObject({ userId: 'u2', parkCellsHeld: 1, share: 0.25 });
+    expect(result.basis).toBe('parkPaths');
+    expect(result.cellTotal).toBe(4);
+    expect(result.entries[0]).toMatchObject({ userId: 'u1', countedCells: 2, share: 0.5 });
+    expect(result.entries[1]).toMatchObject({ userId: 'u2', countedCells: 1, share: 0.25 });
   });
 
-  it('counts non-park ground in cellsHeld but never in share', () => {
+  it('counts non-park ground in cellsHeld but never in a park share', () => {
     // A runner who covers streets rather than parks is not invisible — the
     // percentage alone would hide them entirely.
-    const parkCells = new Set([cell(0)]);
     const result = districtConquest(
       [tile(cell(0), 'u1'), tile(cell(5), 'u1'), tile(cell(6), 'u1')],
       DISTRICT,
-      parkCells,
+      new Set([cell(0)]),
     );
     expect(result.entries[0].cellsHeld).toBe(3);
-    expect(result.entries[0].parkCellsHeld).toBe(1);
+    expect(result.entries[0].countedCells).toBe(1);
     expect(result.entries[0].share).toBe(1);
+  });
+
+  it('falls back to the DISTRICT as denominator when there is no park data', () => {
+    // The case that is universal today: park_path_cells is empty in
+    // production, so every real district lands here. It must still be a
+    // percentage — a raw count in its place made the headline number stop
+    // being a share at all, which is what this file's subject forbids.
+    const result = districtConquest([tile(cell(0), 'u1'), tile(cell(1), 'u1')], DISTRICT, new Set());
+    expect(result.basis).toBe('district');
+    // Every res-12 cell in a res-7 arena. Asserted, not assumed.
+    expect(result.cellTotal).toBe(cellToChildrenSize(DISTRICT, DEFAULT_TILE_RES));
+    expect(result.cellTotal).toBe(16807);
+    expect(result.entries[0].share).toBeCloseTo(2 / 16807, 10);
+    expect(result.entries[0].cellsHeld).toBe(2);
+  });
+
+  it('never emits NaN or Infinity, on either basis', () => {
+    for (const parks of [new Set<string>(), new Set([cell(0)])]) {
+      const result = districtConquest([tile(cell(0), 'u1')], DISTRICT, parks);
+      expect(Number.isFinite(result.entries[0].share)).toBe(true);
+      expect(result.cellTotal).toBeGreaterThan(0);
+    }
   });
 
   it('excludes cells from other districts', () => {
@@ -74,26 +95,27 @@ describe('districtConquest', () => {
     expect(result.entries[0].cellsHeld).toBe(1);
   });
 
-  it('flags a district with NO park data instead of reporting 0%', () => {
-    // The important one. 0/0 rendered as "0%" is a lie about the runner's
-    // ground; callers branch on hasDenominator and show cells held.
-    const result = districtConquest([tile(cell(0), 'u1'), tile(cell(1), 'u1')], DISTRICT, new Set());
-    expect(result.hasDenominator).toBe(false);
-    expect(result.parkCellTotal).toBe(0);
-    expect(result.entries[0].share).toBe(0);
-    // The honest number is still there.
-    expect(result.entries[0].cellsHeld).toBe(2);
-    // And no NaN or Infinity ever reaches the UI.
-    expect(Number.isFinite(result.entries[0].share)).toBe(true);
-  });
-
-  it('ranks by cells held when there is no denominator, matching what is shown', () => {
-    const result = districtConquest(
+  it('ranks by the number actually shown, on either basis', () => {
+    const noParks = districtConquest(
       [tile(cell(0), 'small'), tile(cell(1), 'big'), tile(cell(2), 'big')],
       DISTRICT,
       new Set(),
     );
-    expect(result.entries.map((e) => e.userId)).toEqual(['big', 'small']);
+    expect(noParks.entries.map((e) => e.userId)).toEqual(['big', 'small']);
+
+    // With parks, the ranking follows PARK cells, not total ground: 'parky'
+    // holds fewer cells but more of the thing being measured.
+    const withParks = districtConquest(
+      [
+        tile(cell(0), 'parky'),
+        tile(cell(5), 'streety'),
+        tile(cell(6), 'streety'),
+        tile(cell(7), 'streety'),
+      ],
+      DISTRICT,
+      new Set([cell(0)]),
+    );
+    expect(withParks.entries.map((e) => e.userId)).toEqual(['parky', 'streety']);
   });
 
   it('counts flagged claims and says so, rather than excluding them', () => {
@@ -134,6 +156,6 @@ describe('districtConquest', () => {
   it('returns an empty board rather than throwing when nobody holds anything', () => {
     const result = districtConquest([], DISTRICT, new Set([cell(0)]));
     expect(result.entries).toEqual([]);
-    expect(result.hasDenominator).toBe(true);
+    expect(result.basis).toBe('parkPaths');
   });
 });

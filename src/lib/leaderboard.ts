@@ -26,7 +26,10 @@ import { featureCollection } from '@turf/helpers';
 import union from '@turf/union';
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
 
+import { cellToChildrenSize } from 'h3-js';
+
 import { districtOfCell } from '@/lib/district';
+import { DEFAULT_TILE_RES } from '@/lib/tiles';
 
 export interface LeaderboardRun {
   userId: string;
@@ -257,40 +260,59 @@ export function rankByTileCount(
 export interface ConquestEntry {
   userId: string;
   displayName: string | null;
-  /** Park-path cells in this district that this runner currently owns. */
-  parkCellsHeld: number;
-  /** Share of the district's park paths, 0-1. Zero when the district has no
-   *  park data at all — see districtConquest's `hasDenominator`. */
+  /** Cells counted toward this runner's share — park-path cells under the
+   *  'parkPaths' basis, all owned cells in the district under 'district'. */
+  countedCells: number;
+  /** Share of the district, 0-1. ALWAYS meaningful — see ConquestBasis. */
   share: number;
-  /** Every owned cell in the district, park or not. The honest "ground held"
-   *  number, kept because the percentage alone hides a runner who covers
-   *  streets rather than parks. */
+  /** Every owned cell in the district, park or not. Kept alongside the share
+   *  because the percentage alone hides a runner who covers streets rather
+   *  than parks. */
   cellsHeld: number;
   flaggedCellsHeld: number;
 }
 
+/**
+ * What the percentage is a share OF.
+ *
+ * 'parkPaths' is the denominator park_paths.sql measured as the only one that
+ * moves: one 5.7 km run is 0.262% of San Pedro's area, 0.63% of its street
+ * network, and 5.5% of its park paths.
+ *
+ * 'district' is every res-12 cell in the arena — 16 807 of them, always,
+ * anywhere on Earth, with no data at all. It exists because the park
+ * denominator DOES NOT EXIST in practice: `park_path_cells` is empty in
+ * production (measured 2026-09-09; the 36,193-row data migration is applied
+ * by hand and never was), so every real district falls here today.
+ *
+ * The previous version returned `hasDenominator: false` and let the caller
+ * fall back to a raw cell count, which meant the headline number silently
+ * stopped being a percentage. That is precisely what this file's own header
+ * forbids — "a leaderboard that says 0% because nobody ran the SQL is
+ * indistinguishable from one that says 0% because nobody ran". A share of
+ * the district is always defined and upgrades to the park share the moment
+ * the data lands.
+ *
+ * It counts ground nobody can run (buildings, private land), which is fine:
+ * it is the same denominator for everyone in the district, so the contest is
+ * fair, and the numbers move — 402 cells is 2.4%.
+ */
+export type ConquestBasis = 'parkPaths' | 'district';
+
 export interface DistrictConquest {
   entries: ConquestEntry[];
-  /** Park-path cells inside the district — the denominator. */
-  parkCellTotal: number;
-  /**
-   * False when the district has no park-path cells, which is most of the
-   * planet (only seven Nuevo León municipios are extracted). Callers MUST
-   * branch on this and show cells held instead of a percentage: a share of
-   * nothing is 0/0, and rendering that as "0%" would tell a runner who just
-   * covered their whole neighbourhood that they hold none of it.
-   */
-  hasDenominator: boolean;
+  /** The denominator actually used. */
+  cellTotal: number;
+  basis: ConquestBasis;
 }
 
 /**
  * Board 1 for one district.
  *
- * `parkCells` is the district's park-path cell set (see fetchParkCells) —
- * passed in rather than fetched so this stays pure and testable.
+ * `parkCells` is the district's park-path cell set (see fetchDistrictParkCells)
+ * — passed in rather than fetched so this stays pure and testable. Empty is a
+ * valid input and selects the 'district' basis.
  *
- * Ranked by park share where there is a denominator, and by raw cells held
- * where there is not, so the ordering always matches the number on screen.
  * Ties broken by user id for a stable order between loads, same reasoning as
  * rankByTileCount.
  */
@@ -299,9 +321,12 @@ export function districtConquest(
   district: string,
   parkCells: Set<string>,
 ): DistrictConquest {
+  const basis: ConquestBasis = parkCells.size > 0 ? 'parkPaths' : 'district';
+  const cellTotal = basis === 'parkPaths' ? parkCells.size : cellToChildrenSize(district, DEFAULT_TILE_RES);
+
   const byUser = new Map<
     string,
-    { displayName: string | null; parkCellsHeld: number; cellsHeld: number; flaggedCellsHeld: number }
+    { displayName: string | null; countedCells: number; cellsHeld: number; flaggedCellsHeld: number }
   >();
 
   for (const tile of tiles) {
@@ -311,40 +336,35 @@ export function districtConquest(
     if (districtOfCell(tile.h3) !== district) continue;
     let entry = byUser.get(tile.ownerId);
     if (!entry) {
-      entry = {
-        displayName: tile.displayName,
-        parkCellsHeld: 0,
-        cellsHeld: 0,
-        flaggedCellsHeld: 0,
-      };
+      entry = { displayName: tile.displayName, countedCells: 0, cellsHeld: 0, flaggedCellsHeld: 0 };
       byUser.set(tile.ownerId, entry);
     }
     entry.cellsHeld++;
     if (tile.flagged) entry.flaggedCellsHeld++;
-    if (parkCells.has(tile.h3)) entry.parkCellsHeld++;
+    if (basis === 'district' || parkCells.has(tile.h3)) entry.countedCells++;
     if (entry.displayName === null && tile.displayName !== null) {
       entry.displayName = tile.displayName;
     }
   }
 
-  const parkCellTotal = parkCells.size;
-  const hasDenominator = parkCellTotal > 0;
-
   const entries: ConquestEntry[] = [...byUser.entries()]
     .map(([userId, agg]) => ({
       userId,
       displayName: agg.displayName,
-      parkCellsHeld: agg.parkCellsHeld,
-      share: hasDenominator ? agg.parkCellsHeld / parkCellTotal : 0,
+      countedCells: agg.countedCells,
+      // cellTotal cannot be 0: cellToChildrenSize is 16 807 for any res-7
+      // cell, and the parkPaths branch is only taken when the set is
+      // non-empty. So no NaN or Infinity can reach the UI.
+      share: agg.countedCells / cellTotal,
       cellsHeld: agg.cellsHeld,
       flaggedCellsHeld: agg.flaggedCellsHeld,
     }))
-    .sort((a, b) => {
-      const primary = hasDenominator
-        ? b.parkCellsHeld - a.parkCellsHeld
-        : b.cellsHeld - a.cellsHeld;
-      return primary || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0);
-    });
+    // Ranked by the number actually shown, so the ordering always matches it.
+    .sort(
+      (a, b) =>
+        b.countedCells - a.countedCells ||
+        (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
+    );
 
-  return { entries, parkCellTotal, hasDenominator };
+  return { entries, cellTotal, basis };
 }

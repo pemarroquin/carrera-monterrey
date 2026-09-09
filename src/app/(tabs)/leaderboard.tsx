@@ -27,9 +27,10 @@
 // does not.
 import { useIsFocused } from 'expo-router';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -44,7 +45,7 @@ import { BoardRow } from '@/components/board-row';
 import { DistrictMap, type DistrictHolding } from '@/components/district-map';
 import { ShareBar, type ShareSegment } from '@/components/share-bar';
 import { Icon } from '@/components/ui/icon';
-import { fenceColorForRun } from '@/constants/map';
+import { FENCE_COLOR_SETS } from '@/constants/map';
 import { BottomTabInset, Colors, Spacing, type ThemeColor } from '@/constants/theme';
 import { onIdentityChanged } from '@/lib/auth-events';
 import { fetchDistrictParkCells, fetchDistrictVisits, type ParkCell } from '@/lib/boards';
@@ -68,6 +69,12 @@ interface BoardData {
   meUserId: string | null;
   parkCells: Set<string>;
   parkRows: ParkCell[];
+  /** The park read FAILED, as opposed to the district simply having no park
+   *  data. Without this the two are indistinguishable: both leave parkCells
+   *  empty, and the hero would silently swap from a park percentage to a
+   *  different number with a different caption on one transient network
+   *  error, with nothing on screen saying why. */
+  parksFailed: boolean;
   visits: Parameters<typeof mayorByCell>[0];
   failed: boolean;
 }
@@ -81,7 +88,7 @@ export default function LeaderboardScreen() {
   // fallback, for the same reason the Track map refuses to place its pin on a
   // city centre: this decides which ground a runner is being ranked on, and
   // a guess would rank them somewhere they have never been.
-  const { coords } = useCurrentLocation();
+  const { coords, status: locationStatus, request: requestLocation } = useCurrentLocation();
 
   const district = useMemo(() => (coords ? districtOf(coords) : null), [coords]);
 
@@ -93,7 +100,10 @@ export default function LeaderboardScreen() {
   const load = useCallback(async (forDistrict: string): Promise<BoardData> => {
     // In parallel: three independent reads with no ordering between them.
     const [board, parks, visits] = await Promise.all([
-      fetchTileLeaderboard(),
+      // Scoped to this district server-side, like the two reads beside it —
+      // see fetchTileLeaderboard's own `district` param for what the
+      // unscoped version cost.
+      fetchTileLeaderboard(forDistrict),
       fetchDistrictParkCells(forDistrict),
       fetchDistrictVisits(forDistrict),
     ]);
@@ -102,6 +112,7 @@ export default function LeaderboardScreen() {
       meUserId: board.ok ? board.meUserId : null,
       parkCells: parks.ok ? parks.cells : new Set<string>(),
       parkRows: parks.ok ? parks.parkCells : [],
+      parksFailed: !parks.ok,
       visits: visits.ok ? visits.visits : [],
       // Only the ownership read failing is a failed BOARD. Missing park data
       // is a normal state (most of the planet) and missing visits just means
@@ -110,32 +121,59 @@ export default function LeaderboardScreen() {
     };
   }, []);
 
+  // Bumped by every load that starts; a result is applied only if its ticket
+  // is still the newest. Without it two overlapping refreshes — or one that
+  // outlives a district change — apply out of order, and a pull-to-refresh
+  // can clobber a fresher result from the focus effect.
+  //
+  // Declared and mutated BEFORE the focus effect that also reads it: the
+  // React Compiler rejects modifying a value an effect above it depends on
+  // ("This value cannot be modified"), which is the same class of rule as
+  // the updater-purity trap this codebase already documents.
+  const loadTicketRef = useRef(0);
+
+  const onRefresh = useCallback(async () => {
+    if (district === null) return;
+    const ticket = ++loadTicketRef.current;
+    setRefreshing(true);
+    const next = await load(district);
+    if (loadTicketRef.current === ticket) setData(next);
+    setRefreshing(false);
+  }, [district, load]);
+
   // Refetches on every focus, not just first mount: expo-router keeps tab
   // screens mounted, so a `[]`-deps effect would fetch once early in the
   // session and never again. Same reasoning — and the same identity signal —
   // as the screen this replaced.
   useEffect(() => {
     if (!isFocused || district === null) return;
-    let stale = false;
+    const ticket = ++loadTicketRef.current;
     const id = setTimeout(() => {
       load(district).then((next) => {
-        if (!stale) setData(next);
+        // Same ticket as onRefresh, not a local `stale` flag: the two paths
+        // race each other, so one shared notion of "newest" is the only thing
+        // that orders them.
+        if (loadTicketRef.current === ticket) setData(next);
       });
     }, 0);
-    return () => {
-      stale = true;
-      clearTimeout(id);
-    };
+    return () => clearTimeout(id);
   }, [isFocused, district, identitySignal, load]);
 
-  const onRefresh = useCallback(async () => {
-    if (district === null) return;
-    setRefreshing(true);
-    setData(await load(district));
-    setRefreshing(false);
-  }, [district, load]);
-
-  // ---- Board 1: conquest, as a share of this district's park paths --------
+  // ---- Board 1: conquest, as a share of this district's ground -----------
+  //
+  // The denominator is the district's park paths where that data exists, and
+  // the district's OWN cell count where it does not. That fallback is not
+  // belt-and-braces: measured 2026-09-09, `park_path_cells` is EMPTY in
+  // production (the 36,193-row data migration is applied by hand and never
+  // was), so today the park denominator exists for nobody, in any district.
+  //
+  // districtConquest's own header says a leaderboard reading 0% because
+  // nobody ran the SQL is indistinguishable from one reading 0% because
+  // nobody ran. This screen was violating that rule: it fell back to raw
+  // cell counts, so the headline number quietly stopped being a percentage
+  // at all. A share of the district is always defined, everywhere, with no
+  // data — and it upgrades to the park number the moment the migration
+  // lands.
   const conquest = useMemo(() => {
     if (!data?.tiles || district === null) return null;
     return districtConquest(data.tiles, district, data.parkCells);
@@ -166,6 +204,21 @@ export default function LeaderboardScreen() {
 
   // The map's input. Same source as the share bar and the rows — one fetch,
   // three views of it, so they can never disagree about who holds what.
+  // ONE assignment for the screen, over everyone who appears on either
+  // board, so the map, the bar and both lists agree — and so a runner who is
+  // on Local Leaders but holds no ground still gets a distinct colour.
+  const tints = useMemo(() => {
+    const ids = [
+      ...(conquest?.entries ?? []).map((e) => e.userId),
+      ...(leaders ?? []).map((e) => e.userId),
+    ];
+    return assignTints([...new Set(ids)]);
+  }, [conquest, leaders]);
+  const tintOf = useCallback(
+    (userId: string) => tints.get(userId) ?? FENCE_COLOR_SETS[0].color,
+    [tints],
+  );
+
   const holdings = useMemo<DistrictHolding[]>(() => {
     if (!data?.tiles || district === null) return [];
     const byOwner = new Map<string, string[]>();
@@ -178,30 +231,61 @@ export default function LeaderboardScreen() {
     return [...byOwner.entries()].map(([userId, cells]) => ({
       userId,
       cells,
-      color: tintFor(userId),
+      color: tintOf(userId),
       isMe: userId === data.meUserId,
     }));
-  }, [data, district]);
+  }, [data, district, tintOf]);
 
   const shareSegments = useMemo<ShareSegment[]>(() => {
-    if (!conquest || !conquest.hasDenominator) return [];
+    if (!conquest) return [];
     return conquest.entries.map((entry) => ({
       key: entry.userId,
       share: entry.share,
-      color: tintFor(entry.userId),
+      color: tintOf(entry.userId),
       label: `${entry.displayName ?? t('leaderboard.anonymous')} ${pct(entry.share)}`,
       isMe: entry.userId === data?.meUserId,
     }));
-  }, [conquest, data, t]);
+  }, [conquest, data, t, tintOf]);
 
   if (district === null) {
+    // Three different states, not one message. Before this branched, the
+    // "we need your location" copy showed during the ordinary permission
+    // probe and first fix — on every cold open of the tab — where it reads as
+    // a refusal rather than as work in progress. And a denied permission was
+    // a dead end: autoRequest fires once on mount, expo-router keeps this
+    // screen mounted, so nothing ever asked again and there was no control to
+    // ask with.
+    if (locationStatus === 'idle' || locationStatus === 'locating') {
+      return (
+        <Shell c={c} title={t('leaderboard.title')}>
+          <View style={styles.centre}>
+            <ActivityIndicator color={c.textSecondary} />
+            <Text style={[styles.emptyText, { color: c.textSecondary }]}>
+              {t('leaderboard.locating')}
+            </Text>
+          </View>
+        </Shell>
+      );
+    }
     return (
       <Shell c={c} title={t('leaderboard.title')}>
         <Empty
           icon="location.fill"
           android="my_location"
-          text={t('leaderboard.needLocation')}
+          text={
+            locationStatus === 'unavailable'
+              ? t('leaderboard.locationUnavailable')
+              : t('leaderboard.needLocation')
+          }
           c={c}
+          action={
+            // Only where asking again can actually help. 'unavailable' means
+            // the device has no geolocation at all, and a button that cannot
+            // work is worse than none.
+            locationStatus === 'denied'
+              ? { label: t('leaderboard.enableLocation'), onPress: () => void requestLocation() }
+              : undefined
+          }
         />
       </Shell>
     );
@@ -225,7 +309,6 @@ export default function LeaderboardScreen() {
     );
   }
 
-  const hasDenominator = conquest?.hasDenominator === true;
 
   return (
     <Shell c={c} title={t('leaderboard.title')}>
@@ -252,17 +335,26 @@ export default function LeaderboardScreen() {
           entering={FadeInDown.duration(340)}
           style={[styles.hero, { backgroundColor: c.backgroundElement }]}>
           <Text style={[styles.heroValue, { color: c.text }]}>
-            {hasDenominator ? pct(me?.share ?? 0) : String(me?.cellsHeld ?? 0)}
+            {pct(me?.share ?? 0)}
           </Text>
           <Text style={[styles.heroCaption, { color: c.textSecondary }]}>
-            {/* Two different sentences, because 0/0 is not 0%. A district
-                with no park data must never tell a runner who just covered
-                their whole neighbourhood that they hold none of it. */}
-            {hasDenominator
+            {/* The caption names the denominator, because the two are not
+                the same claim and the runner has to know which they are
+                looking at. Both are percentages — see ConquestBasis for why
+                there is no longer a raw-count fallback. */}
+            {conquest?.basis === 'parkPaths'
               ? t('leaderboard.heroParkShare')
-              : t('leaderboard.heroCellsHeld')}
+              : t('leaderboard.heroDistrictShare')}
           </Text>
           <View style={styles.heroChips}>
+            {/* A failed park read is SAID, not absorbed. Without this it is
+                indistinguishable from a district that simply has no park
+                data: both leave the set empty, and the percentage would
+                quietly change what it means with nothing on screen to
+                explain it. */}
+            {data.parksFailed && (
+              <Chip text={t('leaderboard.parksUnavailable')} c={c} tone={c.accent} />
+            )}
             <Chip
               text={myRank > 0 ? t('leaderboard.rankOf', { rank: myRank, total: conquest?.entries.length ?? 0 }) : t('leaderboard.unranked')}
               c={c}
@@ -285,7 +377,7 @@ export default function LeaderboardScreen() {
 
         {/* WHO HOLDS THIS PLACE, as one bar. Only where there is a real
             denominator — a bar of nothing is not a picture of anything. */}
-        {hasDenominator && shareSegments.length > 0 && (
+        {shareSegments.length > 0 && (
           <Animated.View entering={FadeInDown.duration(340).delay(60)} style={styles.block}>
             <ShareBar
               segments={shareSegments}
@@ -293,7 +385,6 @@ export default function LeaderboardScreen() {
               unclaimedLabel={t('leaderboard.unclaimed', {
                 pct: pct(Math.max(0, 1 - shareSegments.reduce((s, x) => s + x.share, 0))),
               })}
-              othersLabel={t('leaderboard.others')}
             />
           </Animated.View>
         )}
@@ -309,9 +400,9 @@ export default function LeaderboardScreen() {
                 key={entry.userId}
                 rank={i + 1}
                 name={entry.displayName ?? t('leaderboard.anonymous')}
-                score={hasDenominator ? pct(entry.share) : String(entry.cellsHeld)}
+                score={pct(entry.share)}
                 detail={t('leaderboard.cellsDetail', { count: entry.cellsHeld })}
-                tint={tintFor(entry.userId)}
+                tint={tintOf(entry.userId)}
                 isMe={entry.userId === data.meUserId}
                 flaggedLabel={
                   entry.flaggedCellsHeld > 0
@@ -330,8 +421,8 @@ export default function LeaderboardScreen() {
 
         {/* BOARD 2 */}
         <Section
-          title={t('leaderboard.leadersTitle')}
-          note={t('leaderboard.leadersNote', { days: MAYORSHIP_WINDOW_DAYS })}
+          title={t('leaderboard.leadersTitle', { days: MAYORSHIP_WINDOW_DAYS })}
+          note={t('leaderboard.leadersNote')}
           c={c}>
           {leaders && leaders.length > 0 ? (
             leaders.map((entry, i) => (
@@ -341,7 +432,7 @@ export default function LeaderboardScreen() {
                 name={entry.displayName ?? t('leaderboard.anonymous')}
                 score={String(entry.cellsHeld)}
                 detail={t('leaderboard.bestDays', { count: entry.bestDays })}
-                tint={tintFor(entry.userId)}
+                tint={tintOf(entry.userId)}
                 isMe={entry.userId === data.meUserId}
                 c={c}
               />
@@ -417,11 +508,14 @@ function Empty({
   android,
   text,
   c,
+  action,
 }: {
   icon: SFSymbol;
   android: AndroidSymbol;
   text: string;
   c: Record<ThemeColor, string>;
+  /** A way out of the state, where one exists. */
+  action?: { label: string; onPress: () => void };
 }) {
   return (
     <Animated.View entering={FadeIn.duration(400)} style={styles.centre}>
@@ -429,6 +523,14 @@ function Empty({
         <Icon ios={icon} android={android} size={28} color={c.textSecondary} />
       </View>
       <Text style={[styles.emptyText, { color: c.textSecondary }]}>{text}</Text>
+      {action && (
+        <Pressable
+          onPress={action.onPress}
+          accessibilityRole="button"
+          style={[styles.action, { backgroundColor: c.accent }]}>
+          <Text style={styles.actionLabel}>{action.label}</Text>
+        </Pressable>
+      )}
     </Animated.View>
   );
 }
@@ -448,15 +550,47 @@ function pct(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
-/** A runner's accent, stable for the life of their account. Keyed on the
- *  user id, NOT their fence colour (which is per-run by design), so one
- *  person reads as one colour down the whole screen and in the share bar. */
-function tintFor(userId: string): string {
+/** A runner's preferred accent — stable for the life of their account, keyed
+ *  on the user id rather than their fence colour (which is per-run by
+ *  design). */
+function preferredTint(userId: string): number {
   let h = 0;
   for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) | 0;
-  // fenceColorForRun takes epoch ms and divides by 1000, so scale up to keep
-  // every bucket reachable.
-  return fenceColorForRun(Math.abs(h) * 1000).color;
+  return Math.abs(h);
+}
+
+/**
+ * Distinct colours for everyone on screen.
+ *
+ * Colour is the ONLY thing linking a runner across the three views — their
+ * slice of the share bar, their shape on the map, and their row. A collision
+ * merges two people's territory into one apparent colour, which is worse
+ * than either of them being a colour they did not pick.
+ *
+ * FENCE_COLOR_SETS holds six colours, so hashing alone collides ~72% of the
+ * time with four runners in a district (review, 2026-09-09). This keeps the
+ * hash as a PREFERENCE — so a runner's colour is stable as long as nobody
+ * else wants it — and walks to the next free one when it is taken. Ties
+ * resolve by rank order, which is stable between loads because both boards
+ * are total orders.
+ *
+ * Past six runners colours must repeat; the wrap is deterministic rather
+ * than arbitrary so at least the repeat is consistent between renders.
+ */
+function assignTints(userIds: string[]): Map<string, string> {
+  const palette = FENCE_COLOR_SETS.length;
+  const taken = new Set<number>();
+  const out = new Map<string, string>();
+  for (const userId of userIds) {
+    const wanted = preferredTint(userId) % palette;
+    let slot = wanted;
+    for (let step = 0; step < palette && taken.has(slot); step++) {
+      slot = (wanted + step + 1) % palette;
+    }
+    taken.add(slot);
+    out.set(userId, FENCE_COLOR_SETS[slot].color);
+  }
+  return out;
 }
 
 const styles = StyleSheet.create({
@@ -491,5 +625,7 @@ const styles = StyleSheet.create({
     paddingBottom: BottomTabInset,
   },
   iconWrap: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  action: { paddingVertical: Spacing.two, paddingHorizontal: Spacing.four, borderRadius: 999 },
+  actionLabel: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
   emptyText: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
 });

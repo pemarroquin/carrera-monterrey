@@ -252,11 +252,15 @@ const translations = {
       arenaKicker: 'TU DISTRITO',
       arenaHere: 'Donde estás',
       needLocation: 'Necesitamos tu ubicación para saber en qué distrito compites.',
+      locating: 'Buscando tu ubicación…',
+      locationUnavailable: 'Este dispositivo no puede darnos una ubicación.',
+      enableLocation: 'Permitir ubicación',
       // Dos frases, no una: 0/0 no es 0%. Un distrito sin datos de parques
       // no puede decirle a alguien que acaba de cubrir su colonia que no
       // tiene nada.
       heroParkShare: 'de los caminos de parque de este distrito son tuyos',
-      heroCellsHeld: 'casillas que tienes en este distrito',
+      heroDistrictShare: 'de este distrito es tuyo',
+      parksUnavailable: 'Sin datos de parques',
       rankOf: 'Lugar %{rank} de %{total}',
       unranked: 'Sin territorio aquí',
       // El número que une las dos tablas: la tienes, pero alguien viene más
@@ -266,7 +270,6 @@ const translations = {
         other: '%{count} casillas en disputa',
       } as PluralForm,
       unclaimed: 'Libre %{pct}',
-      others: 'Otros',
       // Tabla 1. Cada sección dice qué mide — así las dos caben en una sola
       // pantalla sin que dos números que no se comparan parezcan un ranking.
       conquestTitle: 'CONQUISTA · AHORA MISMO',
@@ -760,8 +763,12 @@ const translations = {
       arenaKicker: 'YOUR DISTRICT',
       arenaHere: 'Where you are',
       needLocation: 'We need your location to know which district you are competing in.',
+      locating: 'Finding your location…',
+      locationUnavailable: 'This device cannot give us a location.',
+      enableLocation: 'Allow location',
       heroParkShare: "of this district's park paths are yours",
-      heroCellsHeld: 'cells you hold in this district',
+      heroDistrictShare: 'of this district is yours',
+      parksUnavailable: 'Park data unavailable',
       rankOf: '%{rank} of %{total}',
       unranked: 'No ground here yet',
       contested: {
@@ -769,7 +776,6 @@ const translations = {
         other: '%{count} cells contested',
       } as PluralForm,
       unclaimed: 'Unclaimed %{pct}',
-      others: 'Others',
       conquestTitle: 'CONQUEST · RIGHT NOW',
       conquestNote:
         'Ground each runner holds at this moment. Anyone can take it by running there.',

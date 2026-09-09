@@ -78,7 +78,16 @@ export interface MayorshipEntry {
  * every run is attributed consistently.
  */
 function dayKey(iso: string): string {
-  return iso.slice(0, 10) === '' ? iso : new Date(iso).toISOString().slice(0, 10);
+  // No defensive ternary here, deliberately. An earlier version read
+  // `iso.slice(0, 10) === '' ? iso : …`, which LOOKS like a guard against a
+  // bad timestamp and only catches the empty string — anything else
+  // unparseable still reaches toISOString() and throws RangeError. Documenting
+  // a safety that does not exist is worse than none, because the next caller
+  // trusts it.
+  //
+  // The real guard is in mayorByCell, which drops any row whose time is NaN
+  // before this is ever reached. Callers must keep that contract.
+  return new Date(iso).toISOString().slice(0, 10);
 }
 
 /** Milliseconds in the trailing window. */

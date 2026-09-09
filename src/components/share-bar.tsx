@@ -26,16 +26,28 @@ export interface ShareSegment {
   isMe: boolean;
 }
 
-/** Below this a segment is invisible anyway, and stacking many of them makes
- *  the bar look like noise rather than a division of ground. Everything
- *  under it is folded into one "others" segment. */
-const MIN_VISIBLE_SHARE = 0.02;
+/**
+ * Minimum rendered width of a segment, in px.
+ *
+ * This replaced a MIN_VISIBLE_SHARE of 0.02 that folded any sub-2% runner
+ * into an anonymous grey "others" block — which was exactly backwards. The
+ * sub-2% case is not an edge case here, it is the NORMAL early state, and it
+ * is the state this component's header says it exists to serve ("you 0.8%,
+ * unclaimed 99.2%"). With one runner at 0.8% the bar rendered no tinted
+ * segment at all: their colour, their name, their percentage and the isMe
+ * ring all vanished and the first-run state read as "Others 0.8%".
+ *
+ * A floor on WIDTH keeps proportions honest for large shares while keeping
+ * small ones legible, instead of deciding some runners do not get drawn. The
+ * distortion it introduces is bounded and only matters with many runners in
+ * one district — at which point every share is large enough not to need it.
+ */
+const MIN_SEGMENT_PX = 8;
 
 export function ShareBar({
   segments,
   c,
   unclaimedLabel,
-  othersLabel,
 }: {
   segments: ShareSegment[];
   c: Record<ThemeColor, string>;
@@ -43,17 +55,11 @@ export function ShareBar({
    *  for a bar whose segments already sum to 1 (the mayorship bar, where
    *  every held cell has exactly one holder). */
   unclaimedLabel: string | null;
-  othersLabel: string;
 }) {
-  const visible = segments.filter((s) => s.share >= MIN_VISIBLE_SHARE);
-  const foldedShare = segments
-    .filter((s) => s.share < MIN_VISIBLE_SHARE)
-    // A tiny segment still counts toward the total, so folding must SUM
-    // rather than drop — otherwise the remainder silently absorbs it and the
-    // bar overstates how much ground is free.
-    .reduce((sum, s) => sum + s.share, 0);
-
-  const claimed = visible.reduce((sum, s) => sum + s.share, 0) + foldedShare;
+  // Only a genuinely empty share is dropped — someone holding nothing is not
+  // a slice of anything. Everyone else is drawn, however small.
+  const visible = segments.filter((s) => s.share > 0);
+  const claimed = visible.reduce((sum, s) => sum + s.share, 0);
   // Clamped, because floating-point sums of many shares can land a hair over
   // 1 and a negative flex would throw the layout away.
   const remainder = Math.max(0, 1 - claimed);
@@ -68,6 +74,7 @@ export function ShareBar({
               styles.segment,
               {
                 flexGrow: segment.share,
+                minWidth: MIN_SEGMENT_PX,
                 backgroundColor: segment.color,
                 // Your own slice is the one you look for. A ring rather than
                 // a different colour, so the per-runner colour still keys to
@@ -78,11 +85,6 @@ export function ShareBar({
             ]}
           />
         ))}
-        {foldedShare > 0 && (
-          <View
-            style={[styles.segment, { flexGrow: foldedShare, backgroundColor: c.textSecondary }]}
-          />
-        )}
         {unclaimedLabel !== null && remainder > 0 && (
           <View style={[styles.segment, { flexGrow: remainder }]} />
         )}
@@ -92,7 +94,6 @@ export function ShareBar({
         {visible.map((segment) => (
           <Key key={segment.key} color={segment.color} text={segment.label} c={c} />
         ))}
-        {foldedShare > 0 && <Key color={c.textSecondary} text={othersLabel} c={c} />}
         {unclaimedLabel !== null && remainder > 0 && (
           <Key color={c.backgroundElement} text={unclaimedLabel} c={c} />
         )}
