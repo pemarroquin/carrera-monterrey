@@ -15,6 +15,7 @@ import { useColorScheme } from 'react-native';
 import GestureHandlerRootView from 'react-native-gesture-handler/lib/module/components/GestureHandlerRootView';
 
 import { EmailLinkBanner } from '@/components/email-link-banner';
+import { PortraitGate } from '@/components/portrait-gate';
 import { CinematicSplash } from '@/components/splash';
 import { LocaleProvider } from '@/lib/i18n';
 import { RacesProvider } from '@/lib/races-provider';
@@ -50,6 +51,12 @@ export default function RootLayout() {
                 clicked email link can land on any route, and the
                 confirmation has to show regardless of which one. */}
             <EmailLinkBanner />
+            {/* LAST, so it covers the splash and the banner too. Web-only
+                and a no-op on native, which the OS already portrait-locks.
+                Rendered here rather than per-screen because it must not
+                unmount anything behind it — a session recording on the
+                Track tab keeps recording while the phone is sideways. */}
+            <PortraitGate />
           </ThemeProvider>
         </RemindersProvider>
         </SavedProvider>

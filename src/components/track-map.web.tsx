@@ -21,16 +21,31 @@
 // Standard shades custom layers by the style's own light preset like any
 // basemap layer (this style's Standard import sets lightPreset: 'night'),
 // which is why every route/wall colour used to render at roughly a third of
-// its intended brightness (P3 §7a). The live territory fill (FILL_SRC) is
-// new for the same reason it was missing before: there was no fill layer at
-// all, only two lines and one fill-extrusion.
+// its intended brightness (P3 §7a).
 //
-// Two things animate continuously while a session is live, so the map
+// There is exactly ONE traced line on this map: ROUTE_SRC (plus its blurred
+// glow twin), fed the live edge of the newest leg. There used to be a second
+// pair — an enclosure fill and its gradient rim, built by buildFence() over
+// the whole growing path. buildFence AUTO-CLOSES the path into a ring, so
+// drawing that ring's boundary as a LineString put three artefacts on screen
+// at once (reported with screenshots 2026-09-08):
+//   1. a straight chord from the runner's live position back to the start,
+//      cutting across ground nobody ran (through the middle of a park);
+//   2. what looked like a duplicated route — the ring traces the path
+//      itself, so an out-and-back drew BOTH its sides alongside ROUTE_SRC,
+//      three parallel lines for one run;
+//   3. a fill shading the enclosed area as claimed, which under the tile
+//      coverage model it is not.
+// Territory is the H3 tile footprint (TILES_SRC/WALL_SRC), never an
+// enclosure — see gap-policy.ts. Both the native track map and the saved-run
+// summary (fence-map.web.tsx) already draw tiles only; this brings the web
+// track map to parity. Do not reintroduce an enclosure outline here.
+//
+// One thing animates continuously while a session is live, so the map
 // doesn't read as flat/static even when the runner is standing still: the
-// fill breathes between LIVE_FILL_OPACITY_LOW/HIGH, and the route line (plus
-// the fill's own rim, FILL_OUTLINE_SRC) flows ROUTE_GRADIENT along itself
-// via gradient-flow.ts. Both are plain setInterval timers, not
-// requestAnimationFrame loops — see the pulse-dot comment below.
+// route line flows ROUTE_GRADIENT along itself via gradient-flow.ts. It's a
+// plain setInterval timer, not a requestAnimationFrame loop — see the
+// pulse-dot comment below.
 import { cellsToMultiPolygon } from 'h3-js';
 import type { AndroidSymbol, SFSymbol } from 'expo-symbols';
 import type { GeoJSONSource, Map as MapboxMap, Marker } from 'mapbox-gl';
@@ -47,16 +62,11 @@ import {
   EMISSIVE_STRENGTH_FULL,
   FENCE_LAG_M,
   FENCE_RISE_MS,
+  FENCE_SHIMMER_STEP_MS,
   FENCE_WALL_COLOR,
   FENCE_WALL_HEIGHT_M,
   FENCE_WALL_OPACITY,
   FOLLOW_OFFSET_RATIO,
-  LIVE_FILL_OPACITY_HIGH,
-  LIVE_FILL_OPACITY_LOW,
-  LIVE_FILL_OUTLINE_WIDTH,
-  LIVE_FILL_PULSE_MS,
-  LIVE_FILL_RECOMPUTE_MS,
-  LIVE_FILL_RECOMPUTE_POINTS,
   MAP_DEFAULT_ZOOM,
   MAP_SLOT_FILL,
   MAP_SLOT_ROUTE,
@@ -68,6 +78,7 @@ import {
   ROUTE_GLOW_OPACITY,
   ROUTE_GLOW_WIDTH,
   ROUTE_GRADIENT,
+  ROUTE_GRADIENT_COLORS,
   ROUTE_LINE_COLOR,
   ROUTE_LINE_WIDTH,
   SESSION_FLY_MS,
@@ -89,7 +100,7 @@ import { splitLegs, type TimedPoint } from '@/lib/gap-policy';
 import { lineGradientExpression } from '@/lib/fence-draw';
 import { startGradientFlow } from '@/lib/gradient-flow';
 import { useRegion } from '@/lib/region-context';
-import { buildFence, outerRings, type LatLng } from '@/lib/territory';
+import { type LatLng } from '@/lib/territory';
 
 
 /** No chrome over the map — the old behaviour, and what a caller that
@@ -101,9 +112,8 @@ const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
 const MAPBOX_CSS_URL = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlPkg.version}/mapbox-gl.css`;
 const ROUTE_SRC = 'run-route';
 const WALL_SRC = 'run-wall';
-const FILL_SRC = 'run-fill';
-const FILL_OUTLINE_SRC = 'run-fill-outline';
 const TILES_SRC = 'run-tiles';
+const ENCLOSED_SRC = 'run-enclosed';
 const PULSE_STYLE_ID = 'track-pulse-style';
 
 /**
@@ -159,13 +169,23 @@ interface TrackMapProps {
   /** This run's fence colour ('#rrggbb') — see FENCE_COLOR_SETS. */
   fenceColor: string;
   /** Tile Coverage brief §6 step 4 — this session's live covered H3 cells,
-   *  computed and throttled in index.tsx (same cadence as the existing live
-   *  enclosure fill below, LIVE_FILL_RECOMPUTE_MS/POINTS) and passed down
-   *  ready to render. Rendered via its OWN effect, deliberately separate
-   *  from the points-driven effect that owns WALL_SRC/FILL_SRC/the camera —
-   *  see this component's own report note on why that effect was left
-   *  untouched rather than folding this in. */
+   *  computed and throttled in index.tsx and passed down ready to render.
+   *  Rendered via its OWN effect, deliberately separate from the
+   *  points-driven effect that owns ROUTE_SRC/the camera — see this
+   *  component's own report note on why that effect was left untouched
+   *  rather than folding this in. */
   tiles: string[];
+  /** The cells claimed by CLOSING A LOOP around them rather than by being
+   *  run over — enclosure.ts's enclosedCells, computed and throttled in
+   *  index.tsx alongside `tiles`, and disjoint from it.
+   *
+   *  Its own prop, and its own layer, because it gets its own treatment:
+   *  captured ground shimmers through the gradient wheel to mark it as
+   *  conquered while run-over ground holds the run's solid identity colour
+   *  (Pedro's ask, 2026-09-08). Disjoint matters — the two fills are
+   *  siblings, not stacked, so neither region ever blends two translucent
+   *  fills and reads muddier than the other. */
+  enclosedTiles: string[];
   dark: boolean;
   color: ColorValue;
   placeholder: string;
@@ -231,6 +251,7 @@ export function TrackMap({
   active,
   fenceColor,
   tiles,
+  enclosedTiles,
   placeholder,
   placeholderColor,
   unavailable,
@@ -243,18 +264,33 @@ export function TrackMap({
   const mapRef = useRef<MapboxMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const readyRef = useRef(false);
+  // The same fact as readyRef, as STATE — because a ref cannot wake an
+  // effect. Every effect below bails until the map has loaded, and most
+  // re-run on their own data (points, here, tiles) a fix or two later. Two
+  // do NOT: the animation-arming and gesture-listener effects depend only on
+  // `active`, which changes once at session start and not again. If the map
+  // was still loading at that moment they bailed and never ran for the whole
+  // session — no gradient flow, no conquered shimmer, and no drag/zoom
+  // listeners at all, so the browse hold and auto-return simply did not
+  // exist. Reachable on any cold start: mapbox-gl is a 1.8 MB dynamic
+  // import plus a style fetch, and a runner can press Start inside that.
+  //
+  // Every readiness-gated effect now lists `mapReady`, so "the map finished
+  // loading" is an event they can all react to rather than a value they
+  // happened to read too early.
+  const [mapReady, setMapReady] = useState(false);
   const flownRef = useRef(false);
-  // Throttle state for the live territory fill — see LIVE_FILL_RECOMPUTE_MS.
-  const lastFillRef = useRef({ atMs: 0, pointCount: 0 });
-  // The two "feels alive even standing still" animation timers — JS
-  // intervals, not requestAnimationFrame loops (see the pulse-dot comment
-  // below for why that distinction matters for the length of a run). Both
-  // are armed and cleared by the `active` effect further down, so they only
-  // ever run mid-session and never on the idle pre-run map.
-  const fillPulseIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The "feels alive even standing still" animation timer — a JS interval,
+  // not a requestAnimationFrame loop (see the pulse-dot comment below for
+  // why that distinction matters for the length of a run). Armed and cleared
+  // by the `active` effect further down, so it only ever runs mid-session
+  // and never on the idle pre-run map.
+  //
   // The gradient flow owns its own timer (gradient-flow.ts); this holds its
   // stopper rather than an interval id.
   const routeFlowStopRef = useRef<(() => void) | null>(null);
+  // The conquered-ground shimmer's own interval — see the ENCLOSED_SRC layer.
+  const shimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Camera control during a session (Task D / P4). preferredZoom is a REF,
   // not state: the zoom buttons (and now pinch-zoom, see the gesture effect
@@ -276,14 +312,23 @@ export function TrackMap({
   // the same "always current, no stale closure" treatment.
   const pointsRef = useRef<LatLng[]>([]);
   const autoReturnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True from the moment a user gesture arms auto-return until that timer
-  // actually fires (or is cancelled by a mode toggle / new session). Overview
-  // mode's whole point is to let the runner step back and read the shape of
-  // what they've covered — the per-fix re-fit effect below checks this and
-  // stays hands-off while it's true, so a deliberate pan/zoom survives until
-  // AUTO_RETURN_IDLE_MS, not just until the next GPS fix (~1s). Follow mode
-  // is unaffected: it's meant to stay glued to the runner, fix to fix.
-  const overviewManualPendingRef = useRef(false);
+  // True from the moment a user gesture arms auto-return until the camera is
+  // next placed authoritatively (the timer firing, a mode toggle, a recenter
+  // tap, a new session). While it's true the per-fix camera effect below
+  // stays hands-off, so a deliberate pan/pinch survives for the whole
+  // AUTO_RETURN_IDLE_MS window instead of being undone by the next GPS fix.
+  //
+  // It applies in BOTH modes, and that is the fix for "it's almost as if it
+  // doesn't allow you to explore the map" (Pedro, 2026-09-08). It used to be
+  // checked only when cameraMode was 'overview' — so in follow mode, which
+  // is what every session STARTS in, the per-fix effect re-centred on the
+  // runner ~1-2s after a pan and AUTO_RETURN_IDLE_MS never came into it at
+  // all. Panning away in follow mode was effectively impossible.
+  //
+  // Follow mode still stays glued fix to fix; nothing sets this ref unless
+  // the runner actually touches the map (dragend/zoomend with a real
+  // originalEvent — see the auto-return effect below).
+  const manualPendingRef = useRef(false);
 
   // P4: cameraMode replaces the old cameraOffTarget visibility flag
   // entirely. The control is now ALWAYS rendered while a session is active
@@ -319,10 +364,17 @@ export function TrackMap({
   const applyCameraForMode = useCallback((durationMs: number) => {
     const map = mapRef.current;
     if (!map) return;
+    // Every caller here is an authoritative "the camera belongs at the
+    // current mode's target NOW" — the idle timer firing, a mode toggle, a
+    // recenter tap. So both halves of the browse hold are released in ONE
+    // place: the pending timer and the ref the per-fix effect reads. Leaving
+    // the ref set here is what would strand that effect hands-off forever
+    // (its timer having been cleared, nothing left to reset the ref).
     if (autoReturnTimerRef.current) {
       clearTimeout(autoReturnTimerRef.current);
       autoReturnTimerRef.current = null;
     }
+    manualPendingRef.current = false;
 
     if (cameraModeRef.current === 'overview') {
       const head = headRef.current;
@@ -375,8 +427,7 @@ export function TrackMap({
     const next: CameraMode = cameraModeRef.current === 'follow' ? 'overview' : 'follow';
     cameraModeRef.current = next;
     setCameraMode(next);
-    overviewManualPendingRef.current = false;
-    applyCameraForMode(900);
+    applyCameraForMode(900); // clears the browse hold too — see its own comment
   }, [applyCameraForMode]);
 
   const zoomBy = useCallback((delta: number) => {
@@ -448,27 +499,16 @@ export function TrackMap({
         });
         // Tile Coverage brief §6 step 4 — this session's live tile fill, fed
         // by the `tiles` prop's own effect below (NOT the points-driven
-        // effect that owns FILL_SRC/WALL_SRC — index.tsx already throttles
-        // the prop, so this source just renders whatever it's handed).
+        // effect that owns ROUTE_SRC — index.tsx already throttles the prop,
+        // so this source just renders whatever it's handed).
         map.addSource(TILES_SRC, {
           type: 'geojson',
           data: { type: 'FeatureCollection', features: [] },
         });
-        // The live territory fill — was entirely missing (P3 §7b: two line
-        // layers and one fill-extrusion existed, no fill, so the enclosed
-        // area never shaded in while running). Fed by a throttled
-        // buildFence() below, not lineMetrics — a fill has no line-progress.
-        map.addSource(FILL_SRC, {
+        // Ground captured by closing a loop around it, as its own source so
+        // it can carry the conquered shimmer — see the `enclosedTiles` prop.
+        map.addSource(ENCLOSED_SRC, {
           type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] },
-        });
-        // The fill's chromatic rim — same technique as the route line and
-        // the (now fixed) summary outline, traced around the growing
-        // territory's edge instead of the path. Fed alongside FILL_SRC by
-        // the same throttled buildFence() below.
-        map.addSource(FILL_OUTLINE_SRC, {
-          type: 'geojson',
-          lineMetrics: true,
           data: { type: 'FeatureCollection', features: [] },
         });
 
@@ -520,11 +560,42 @@ export function TrackMap({
           source: TILES_SRC,
           slot: MAP_SLOT_FILL,
           paint: {
-            // Default colour at mount, same as WALL_SRC/FILL_SRC below —
+            // Default colour at mount, same as WALL_SRC below —
             // this component persists across sessions (it's not remounted
             // per-run), so the real per-run colour is applied by the
             // fenceColor-sync effect, not baked in here.
             'fill-color': FENCE_WALL_COLOR,
+            'fill-opacity': TILE_FILL_OPACITY,
+            'fill-emissive-strength': EMISSIVE_STRENGTH_FULL,
+          },
+        });
+
+        // Conquered ground. Same slot and opacity as TILES_SRC above and
+        // added right after it, so the two fills sit at the same depth and
+        // read as one continuous territory — what separates them is COLOUR,
+        // not stacking: this one sweeps the ROUTE_GRADIENT wheel while the
+        // run-over ground holds the run's own identity colour.
+        //
+        // `fill-color-transition` is where the shimmer's smoothness comes
+        // from. The interval below only advances the hue one step every
+        // FENCE_SHIMMER_STEP_MS; GL interpolates between each pair on the
+        // GPU. That is the whole reason this can be a 2.2s timer instead of
+        // a requestAnimationFrame loop — see the pulse-dot comment above
+        // for why a per-frame map repaint is the specific trap here.
+        //
+        // Mapbox has no positional gradient for fills at all (only lines
+        // take `line-gradient`), so a fill can only sweep the wheel through
+        // TIME. Same technique, same constant, as a saved territory's
+        // shimmer in territories-map.web.tsx — deliberately, so the live
+        // capture and the saved territory it becomes read as the same thing.
+        map.addLayer({
+          id: ENCLOSED_SRC,
+          type: 'fill',
+          source: ENCLOSED_SRC,
+          slot: MAP_SLOT_FILL,
+          paint: {
+            'fill-color': ROUTE_GRADIENT_COLORS[0],
+            'fill-color-transition': { duration: FENCE_SHIMMER_STEP_MS, delay: 0 },
             'fill-opacity': TILE_FILL_OPACITY,
             'fill-emissive-strength': EMISSIVE_STRENGTH_FULL,
           },
@@ -547,48 +618,12 @@ export function TrackMap({
             'fill-extrusion-emissive-strength': EMISSIVE_STRENGTH_FULL,
           },
         });
-        // Live territory fill. Below the wall in the layer list so the wall
-        // still reads as a distinct rising edge rather than being swallowed
-        // by the flat fill under it; same MAP_SLOT_FILL as the wall, so both
-        // sit above roads and below buildings/labels together.
-        //
-        // fill-opacity starts LOW, not LIVE_FILL_OPACITY_HIGH: the pulse
-        // interval below immediately starts alternating it, and starting at
-        // the low end means the very first fence that appears fades UP
-        // rather than snapping straight to full — same "eases in" feel as
-        // the wall's own rise.
-        map.addLayer({
-          id: FILL_SRC,
-          type: 'fill',
-          source: FILL_SRC,
-          slot: MAP_SLOT_FILL,
-          paint: {
-            'fill-color': FENCE_WALL_COLOR,
-            'fill-opacity': LIVE_FILL_OPACITY_LOW,
-            'fill-opacity-transition': { duration: LIVE_FILL_PULSE_MS, delay: 0 },
-            'fill-emissive-strength': EMISSIVE_STRENGTH_FULL,
-          },
-        }, WALL_SRC);
-        map.addLayer({
-          id: FILL_OUTLINE_SRC,
-          type: 'line',
-          source: FILL_OUTLINE_SRC,
-          slot: MAP_SLOT_ROUTE,
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: {
-            'line-width': LIVE_FILL_OUTLINE_WIDTH,
-            'line-color': ROUTE_GRADIENT[0][1], // fallback — see the route line's own comment above
-            'line-gradient': lineGradientExpression(),
-            'line-emissive-strength': EMISSIVE_STRENGTH_FULL,
-          },
-        });
-
         // "Feels alive even standing still" (mid-run, not idling — see the
-        // dedicated effect below that arms these) — both timers are plain
-        // setInterval, not requestAnimationFrame: see this file's pulse-dot
-        // comment for why a per-frame GL repaint for the whole length of a
-        // run is the specific trap being avoided. Each tick is one cheap
-        // setPaintProperty call, not a geometry rebuild.
+        // dedicated effect below that arms it) — the route's gradient flow is
+        // a plain setInterval, not requestAnimationFrame: see this file's
+        // pulse-dot comment for why a per-frame GL repaint for the whole
+        // length of a run is the specific trap being avoided. Each tick is
+        // one cheap setPaintProperty call, not a geometry rebuild.
 
         const el = document.createElement('div');
         el.className = 'track-dot';
@@ -604,6 +639,10 @@ export function TrackMap({
         });
         markerRef.current = new mapboxgl.Marker({ element: el });
         readyRef.current = true;
+        // Ref first, then state: the ref is what the imperative call sites
+        // read (the marker's dblclick, applyCameraForMode's callers), and it
+        // must be true before any effect this wakes can run.
+        setMapReady(true);
       });
     })();
 
@@ -621,52 +660,61 @@ export function TrackMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Arms the fill-breathe and route-colour-cycle timers ONLY while a session
-  // is active — gated here, not inside the mount effect above, specifically
-  // because they used to run from map mount to unmount regardless of
-  // whether a run was in progress. Sitting on the Track tab with no run
-  // recording cost ~2.2 setPaintProperty calls per second, each forcing a
-  // map repaint, indefinitely, on an empty fill source — directly undoing
-  // P0.1 bug 3, which exists specifically to stop the idle screen burning
-  // battery (see GeoWatchOptions.highAccuracy). This is a running app; the
-  // phone has to survive 40+ minutes with the screen on. "Feels alive even
-  // standing still" means standing still MID-RUN, not idling in the app.
+  // Arms the route-colour-cycle timer ONLY while a session is active —
+  // gated here, not inside the mount effect above, specifically because it
+  // used to run from map mount to unmount regardless of whether a run was in
+  // progress. Sitting on the Track tab with no run recording cost ~2.2
+  // setPaintProperty calls per second, each forcing a map repaint,
+  // indefinitely, on an empty source — directly undoing P0.1 bug 3, which
+  // exists specifically to stop the idle screen burning battery (see
+  // GeoWatchOptions.highAccuracy). This is a running app; the phone has to
+  // survive 40+ minutes with the screen on. "Feels alive even standing
+  // still" means standing still MID-RUN, not idling in the app.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current || !active) return;
 
-    // The fill breathes between LIVE_FILL_OPACITY_LOW/HIGH — GL interpolates
-    // fill-opacity on the GPU between calls via the fill-opacity-transition
-    // set when the layer was created, so this reads as a smooth pulse from
-    // one JS call every LIVE_FILL_PULSE_MS.
-    let fillHigh = false;
-    fillPulseIntervalRef.current = setInterval(() => {
-      fillHigh = !fillHigh;
-      map.setPaintProperty(
-        FILL_SRC,
-        'fill-opacity',
-        fillHigh ? LIVE_FILL_OPACITY_HIGH : LIVE_FILL_OPACITY_LOW,
-      );
-    }, LIVE_FILL_PULSE_MS);
-
-    // The route (and its rim twin) flow their colours along themselves
-    // instead. line-gradient has no `-transition` support at all, so there
-    // is no GPU tween between updates the way fill-opacity has above — every
-    // repaint lands exactly as drawn. That is why the flow moves in many
-    // tiny steps rather than a few large ones; see ROUTE_GRADIENT_FRAME_MS.
-    // The previous version rotated whole colour stops and read as stepped.
+    // The route flows its colours along itself. line-gradient has no
+    // `-transition` support at all, so there is no GPU tween between
+    // updates — every repaint lands exactly as drawn. That is why the flow
+    // moves in many tiny steps rather than a few large ones; see
+    // ROUTE_GRADIENT_FRAME_MS. The previous version rotated whole colour
+    // stops and read as stepped.
     routeFlowStopRef.current = startGradientFlow((gradient) => {
       map.setPaintProperty(ROUTE_SRC, 'line-gradient', gradient);
-      map.setPaintProperty(FILL_OUTLINE_SRC, 'line-gradient', gradient);
     });
 
+    // The conquered-ground shimmer. One step of the wheel per tick; GL
+    // tweens between steps via the layer's own fill-color-transition, so
+    // this is ~0.45 setPaintProperty calls a second for the whole run.
+    //
+    // Armed on `active` alongside the flow above and not gated on the
+    // enclosure being non-empty, deliberately: an empty source paints
+    // nothing, so a tick against one costs a paint property assignment and
+    // no pixels, and the alternative — arming and tearing down on
+    // enclosedTiles.length — would re-arm the timer at the exact moment the
+    // first capture appears, restarting the phase and making the first
+    // shimmer the one that stutters. The idle pre-session map is what the
+    // `active` gate is protecting (see this effect's own header).
+    let shimmerStep = 0;
+    shimmerIntervalRef.current = setInterval(() => {
+      shimmerStep = (shimmerStep + 1) % ROUTE_GRADIENT_COLORS.length;
+      map.setPaintProperty(ENCLOSED_SRC, 'fill-color', ROUTE_GRADIENT_COLORS[shimmerStep]);
+    }, FENCE_SHIMMER_STEP_MS);
+
     return () => {
-      if (fillPulseIntervalRef.current) clearInterval(fillPulseIntervalRef.current);
       routeFlowStopRef.current?.();
-      fillPulseIntervalRef.current = null;
       routeFlowStopRef.current = null;
+      if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+      shimmerIntervalRef.current = null;
+      // Back to a colour, not left mid-sweep: this component outlives a
+      // session, so the next one would otherwise open on whatever hue the
+      // last tick happened to land on.
+      if (map.getLayer(ENCLOSED_SRC)) {
+        map.setPaintProperty(ENCLOSED_SRC, 'fill-color', ROUTE_GRADIENT_COLORS[0]);
+      }
     };
-  }, [active]);
+  }, [active, mapReady]);
 
   // Resets the camera mode to 'follow' at the start of every session — the
   // mode is session-scoped, not a persisted user setting. Gated to fire only
@@ -680,14 +728,14 @@ export function TrackMap({
     if (!active) return;
     cameraModeRef.current = 'follow';
     bearingRef.current = null;
-    overviewManualPendingRef.current = false;
+    manualPendingRef.current = false;
     // Deferred by a tick, not called straight from the effect body — the
     // React Compiler's lint rule traces a call through and flags any
     // setState it can reach as a synchronous effect update. Same pattern as
     // index.tsx's checkpoint-load effect.
     const id = setTimeout(() => setCameraMode('follow'), 0);
     return () => clearTimeout(id);
-  }, [active]);
+  }, [active, mapReady]);
 
   // Auto-return after AUTO_RETURN_IDLE_MS of no further interaction — gated
   // on `active` the same way as the animation timers above: this exists to
@@ -711,10 +759,12 @@ export function TrackMap({
 
     const armAutoReturn = () => {
       if (autoReturnTimerRef.current) clearTimeout(autoReturnTimerRef.current);
-      overviewManualPendingRef.current = true;
+      manualPendingRef.current = true;
+      // Each new gesture RESTARTS the window (the clear above), so a runner
+      // panning around for a while keeps the map theirs for
+      // AUTO_RETURN_IDLE_MS after they stop, not after they started.
       autoReturnTimerRef.current = setTimeout(() => {
-        overviewManualPendingRef.current = false;
-        applyCameraForMode(900);
+        applyCameraForMode(900); // resets manualPendingRef itself
       }, AUTO_RETURN_IDLE_MS);
     };
 
@@ -754,7 +804,7 @@ export function TrackMap({
         autoReturnTimerRef.current = null;
       }
     };
-  }, [active, applyCameraForMode]);
+  }, [active, applyCameraForMode, mapReady]);
 
   // Marker placement is deliberately gated on a REAL fix. Showing the pin at
   // the region fallback is what made it look like the location was wrong —
@@ -776,7 +826,7 @@ export function TrackMap({
       return;
     }
     marker.setLngLat([head.lng, head.lat]).addTo(map);
-  }, [points, here]);
+  }, [points, here, mapReady]);
 
   // Idle: keep the camera over the runner as they move, so the map isn't
   // still framing wherever they were when the tab opened. Skipped during a
@@ -785,7 +835,7 @@ export function TrackMap({
     const map = mapRef.current;
     if (!map || !readyRef.current || active || !here) return;
     map.easeTo({ center: [here.lng, here.lat], duration: 600 });
-  }, [here, active]);
+  }, [here, active, mapReady]);
 
   // Fly in when a session starts: tilt into 3D and close on the runner. Runs
   // once per session (flownRef), so a later GPS fix doesn't re-trigger it.
@@ -818,24 +868,29 @@ export function TrackMap({
       duration: SESSION_FLY_MS,
       essential: true,
     });
-  }, [active, points, here]);
+  }, [active, points, here, mapReady]);
 
-  // Per-run fence colour. The wall and fill layers are created once at mount
+  // Per-run fence colour. The wall and tile layers are created once at mount
   // (before any session exists) with the default FENCE_WALL_COLOR, so the
   // run's own colour is applied as a paint update — cheap, no layer churn.
+  //
+  // ENCLOSED_SRC is deliberately NOT in here. Captured ground carries the
+  // shimmer instead of the run's identity colour — that contrast IS the
+  // signal that it was conquered rather than covered. Adding it here would
+  // paint over the shimmer's hue on every fenceColor/active change and the
+  // effect would read as an intermittent flicker, not as a bug.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
     map.setPaintProperty(WALL_SRC, 'fill-extrusion-color', fenceColor);
-    map.setPaintProperty(FILL_SRC, 'fill-color', fenceColor);
     map.setPaintProperty(TILES_SRC, 'fill-color', fenceColor);
-  }, [fenceColor, active]);
+  }, [fenceColor, active, mapReady]);
 
   // Tile Coverage brief §6 step 4 — deliberately its OWN effect, not folded
-  // into the points-driven effect below that owns WALL_SRC/FILL_SRC/the
-  // camera. index.tsx already throttles `tiles` (LIVE_FILL_RECOMPUTE_MS/
-  // POINTS), so this just renders whatever it's handed, same "own effect,
-  // untouched existing one" posture as fence-map.web.tsx's rivalTiles.
+  // into the points-driven effect below that owns ROUTE_SRC/the camera.
+  // index.tsx already throttles `tiles`, so this just renders whatever it's
+  // handed, same "own effect, untouched existing one" posture as
+  // fence-map.web.tsx's rivalTiles.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
@@ -851,10 +906,22 @@ export function TrackMap({
     // blend twice, so running a street three times drew it three times as
     // dark. Reported 2026-09-07: the fence should mark total area, not how
     // often it was crossed.
-    const footprint = tileFeatureCollection(tiles);
-    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(footprint);
-    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(footprint);
-  }, [tiles]);
+    //
+    // The WALL is the whole territory's raised edge, so it takes the UNION
+    // of run-over and captured ground — a wall drawn around only the ground
+    // you ran would cut straight through the middle of a closed loop. The
+    // flat fills stay split, one per source, so each region has exactly one
+    // fill and the shimmer is not blended over a second translucent layer.
+    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection(tiles),
+    );
+    (map.getSource(ENCLOSED_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection(enclosedTiles),
+    );
+    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection([...tiles, ...enclosedTiles]),
+    );
+  }, [tiles, enclosedTiles, mapReady]);
 
   // Feed coordinates in. setData on an existing source is the cheap path —
   // no layer or style churn, so the line simply extends.
@@ -911,82 +978,35 @@ export function TrackMap({
     // now, fed by the tiles effect above. `settled` is still computed
     // because splitTrailing is what separates the live gradient edge from
     // everything behind it.
-
-    // Live territory fill — throttled to every LIVE_FILL_RECOMPUTE_POINTS
-    // points or LIVE_FILL_RECOMPUTE_MS, whichever comes first, NOT on every
-    // fix: buildFence runs turf's clean/simplify/union pipeline, O(n) on a
-    // ring that only grows, and this effect re-runs on every accepted point
-    // for the whole length of a run. Uses the FULL point list, not `settled`
-    // (the wall's lag-trimmed input) — a fill lagging the same ~100m behind
-    // the runner would leave a visible, unshaded gap right where they
-    // currently are, which the wall's live-edge line segment already covers
-    // for the route itself.
-    const now = Date.now();
-    const last = lastFillRef.current;
-    const fillSource = map.getSource(FILL_SRC) as GeoJSONSource | undefined;
-    const outlineSource = map.getSource(FILL_OUTLINE_SRC) as GeoJSONSource | undefined;
-    if (points.length < 3) {
-      // Below buildFence's own minimum — most commonly a fresh run just
-      // reset `points` to []. Cleared UNCONDITIONALLY, outside the throttle:
-      // without this the fill (and its rim) kept showing the PREVIOUS run's
-      // polygon (the throttle's own point-count baseline had reset too, so
-      // the "enough new points" branch below wouldn't trip again for a
-      // while).
-      lastFillRef.current = { atMs: now, pointCount: points.length };
-      fillSource?.setData({ type: 'FeatureCollection', features: [] });
-      outlineSource?.setData({ type: 'FeatureCollection', features: [] });
-    } else if (
-      points.length - last.pointCount >= LIVE_FILL_RECOMPUTE_POINTS ||
-      now - last.atMs >= LIVE_FILL_RECOMPUTE_MS
-    ) {
-      lastFillRef.current = { atMs: now, pointCount: points.length };
-      // buildFence returns null for anything too short/collinear to enclose
-      // an area — that's "no fill yet", not an error (territory.ts's own
-      // contract; never throws).
-      const fence = buildFence(points);
-      fillSource?.setData(fence ? fence.geometry : { type: 'FeatureCollection', features: [] });
-      outlineSource?.setData(
-        fence
-          ? {
-              type: 'FeatureCollection',
-              features: outerRings(fence.geometry.geometry).map((ring) => ({
-                type: 'Feature' as const,
-                properties: {},
-                geometry: { type: 'LineString' as const, coordinates: ring },
-              })),
-            }
-          : { type: 'FeatureCollection', features: [] },
-      );
-    }
+    //
+    // Nothing else on this map is derived from `points`. The enclosure fill
+    // and its rim used to be, via a throttled buildFence() right here; both
+    // are gone — see this file's header for the three artefacts that ring
+    // put on screen. Claimed ground is the tile footprint, and it arrives as
+    // its own prop.
 
     // Camera only while recording: panning the map under someone reading
     // their finished route would fight them. Re-applies whichever mode is
     // current on every fix — follow re-centers on the runner (and rotates
     // to their latest smoothed bearing); overview re-fits the growing
-    // bounds. This is what makes gesture drift mostly self-heal within a
-    // fix or two while running, well before AUTO_RETURN_IDLE_MS would fire
-    // — that timer's real job is covering the gap this can't: a paused
-    // session, where no new fix arrives to trigger it. Gated on `head`
-    // existing (not just `running`) for the same reason as the marker
-    // effect above — there's nothing to center or fit until a real fix
-    // exists.
+    // bounds. Gated on `head` existing (not just `running`) for the same
+    // reason as the marker effect above — there's nothing to center or fit
+    // until a real fix exists.
     //
-    // Overview is the one exception: it's the mode a runner switches to
-    // specifically to step back and read the whole shape of what they've
-    // covered, so a fix landing mid-inspection must not snap it back out
-    // from under them. `overviewManualPendingRef` is true for exactly the
-    // AUTO_RETURN_IDLE_MS window after a manual pan/zoom in overview — while
-    // it's true, this effect stays hands-off and the armed auto-return timer
-    // (not this per-fix path) is what eventually re-fits. Follow mode never
-    // sets this ref's check path in play; it keeps its existing glued
-    // behaviour unchanged.
+    // `manualPendingRef` suspends ALL of that for the AUTO_RETURN_IDLE_MS
+    // window after a real pan/pinch, in BOTH modes. The check used to read
+    // `cameraModeRef.current === 'overview' && manualPending`, which meant
+    // follow mode — the mode every session starts in — re-centred on the
+    // runner one fix (~1-2s) after any gesture. That is what made the map
+    // impossible to explore mid-run: the pan landed, and the map took
+    // itself back before you could read it (Pedro, 2026-09-08). The
+    // armed auto-return timer, not this path, is what returns the camera.
+    //
+    // Note this cannot strand the camera: the ONLY thing that sets the ref
+    // is a user gesture, and applyCameraForMode clears it on every
+    // authoritative placement, including the timer's own.
     const head = here ?? points[points.length - 1];
-    if (
-      head &&
-      running &&
-      flownRef.current &&
-      !(cameraModeRef.current === 'overview' && overviewManualPendingRef.current)
-    ) {
+    if (head && running && flownRef.current && !manualPendingRef.current) {
       applyCameraForMode(900);
     }
   }, [points, running, here, applyCameraForMode]);

@@ -93,6 +93,18 @@ interface TrackMapProps {
    *  camera machinery here was treated as something to add alongside, not
    *  touch. */
   tiles: string[];
+  /** The cells claimed by closing a loop around them rather than by being
+   *  run over (enclosure.ts's enclosedCells), disjoint from `tiles`.
+   *
+   *  index.tsx used to merge these into `tiles` before passing them down;
+   *  they arrive separately now so the WEB map can give captured ground its
+   *  own conquered shimmer. Here they are simply unioned back into the same
+   *  flat fill, which is exactly what this component rendered before the
+   *  split — react-native-maps has no paint-property transition to animate a
+   *  fill colour against, so a shimmer would mean re-rendering every
+   *  <Polygon> on a timer, on a device, mid-run. Not worth it unprompted,
+   *  and untestable from here (Expo Go, needs a phone). */
+  enclosedTiles: string[];
   /** Accepted for interface parity with track-map.web.tsx; the map is always
    *  dark here (MAP_ALWAYS_DARK) regardless. */
   dark: boolean;
@@ -148,6 +160,7 @@ export function TrackMap({
   active,
   fenceColor,
   tiles,
+  enclosedTiles,
   placeholder,
   placeholderColor,
   zoomInLabel,
@@ -392,18 +405,22 @@ export function TrackMap({
   // Holes are dropped: react-native-maps takes an outer ring plus a
   // separate `holes` prop, and an enclosed region is claimed ground here
   // anyway (that is what enclosure means), so there is nothing to cut out.
-  const tilePolys = useMemo(
-    () =>
-      tiles.length === 0
-        ? []
-        : cellsToMultiPolygon(tiles).map((rings, i) => ({
-            key: `tile-region-${i}`,
-            // Default (non-GeoJSON) output is [lat, lng], already
-            // react-native-maps' order once mapped.
-            coords: rings[0].map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
-          })),
-    [tiles],
-  );
+  //
+  // Run-over and captured ground are unioned back into ONE fill here — see
+  // the `enclosedTiles` prop for why they arrive apart and why only web
+  // splits them. Dissolving the union (rather than two sets separately) is
+  // also what keeps the internal boundary between them from showing.
+  const tilePolys = useMemo(() => {
+    const all = [...tiles, ...enclosedTiles];
+    return all.length === 0
+      ? []
+      : cellsToMultiPolygon(all).map((rings, i) => ({
+          key: `tile-region-${i}`,
+          // Default (non-GeoJSON) output is [lat, lng], already
+          // react-native-maps' order once mapped.
+          coords: rings[0].map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+        }));
+  }, [tiles, enclosedTiles]);
 
   return (
     <View style={[styles.wrap, StyleSheet.absoluteFill]}>
