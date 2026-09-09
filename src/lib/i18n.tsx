@@ -470,8 +470,14 @@ const translations = {
       zoneSetHere: 'Usar mi ubicación',
       zoneRemove: 'Quitar',
       zoneSetting: 'Guardando…',
+      // El estado ya lo dice el indicador de la fila (Status en
+      // location.tsx), así que la explicación ya no empieza por
+      // "Activada." — decirlo dos veces en la misma tarjeta hacía que el
+      // texto pareciera la única señal de que estaba encendida.
+      zoneOn: 'Activada',
+      zoneOff: 'Sin poner',
       zoneOnHint:
-        'Activada. Recortamos los primeros y últimos %{m} m de cada sesión antes de subirla, con un margen aleatorio para que no se pueda deducir el centro. El punto se queda en este teléfono: nunca se sube.',
+        'Recortamos los primeros y últimos %{m} m de cada sesión antes de subirla, con un margen aleatorio para que no se pueda deducir el centro. El punto se queda en este teléfono: nunca se sube.',
       zoneOffHint:
         'Sin zona privada, el inicio y el final exactos de tus sesiones se suben y cualquier persona que use la app puede verlos. Ponla donde vives.',
       zoneFailed: 'No pudimos guardar tu zona. Revisa el permiso de ubicación e inténtalo otra vez.',
@@ -954,8 +960,14 @@ const translations = {
       zoneSetHere: 'Use my location',
       zoneRemove: 'Remove',
       zoneSetting: 'Saving…',
+      // The row's own status indicator says whether it is on now (Status in
+      // location.tsx), so the explanation no longer opens with "On." —
+      // saying it twice in one block was what made the prose look like the
+      // only signal that it was on at all.
+      zoneOn: 'On',
+      zoneOff: 'Not set',
       zoneOnHint:
-        'On. We trim the first and last %{m} m of every session before uploading it, with a random margin so the centre can\u2019t be worked out. The point stays on this phone \u2014 it is never uploaded.',
+        'We trim the first and last %{m} m of every session before uploading it, with a random margin so the centre can\u2019t be worked out. The point stays on this phone \u2014 it is never uploaded.',
       zoneOffHint:
         'Without a privacy zone, the exact start and end of your sessions are uploaded and visible to anyone using the app. Set it where you live.',
       zoneFailed: "We couldn\u2019t save your zone. Check location permission and try again.",

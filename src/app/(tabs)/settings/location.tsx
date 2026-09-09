@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Hint, SettingRow, SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
-import { Spacing } from '@/constants/theme';
+import { Spacing, type ThemeColor } from '@/constants/theme';
 import { clearHomeZone, getHomeZone, setHomeZone } from '@/lib/home-point';
 import { useI18n } from '@/lib/i18n';
 import type { PrivacyZone } from '@/lib/privacy-zone';
@@ -123,19 +123,7 @@ export default function LocationSettingsScreen() {
           device — see privacy-zone.ts. */}
       <View style={settingsStyles.block}>
         <SettingRow label={t('settings.privacyZone')} c={c}>
-          <Pressable
-            onPress={zone ? clearZone : setZoneHere}
-            disabled={zoneBusy}
-            accessibilityRole="button"
-            hitSlop={10}>
-            <Text style={[settingsStyles.action, { color: c.accent, opacity: zoneBusy ? 0.5 : 1 }]}>
-              {zoneBusy
-                ? t('settings.zoneSetting')
-                : zone
-                  ? t('settings.zoneRemove')
-                  : t('settings.zoneSetHere')}
-            </Text>
-          </Pressable>
+          <Status on={zone !== null} label={zone ? t('settings.zoneOn') : t('settings.zoneOff')} c={c} />
         </SettingRow>
         <Hint c={c}>
           {zoneError
@@ -144,47 +132,128 @@ export default function LocationSettingsScreen() {
               ? t('settings.zoneOnHint', { m: zone.radiusM })
               : t('settings.zoneOffHint')}
         </Hint>
+        <RowAction onPress={zone ? clearZone : setZoneHere} busy={zoneBusy} c={c}>
+          {zoneBusy
+            ? t('settings.zoneSetting')
+            : zone
+              ? t('settings.zoneRemove')
+              : t('settings.zoneSetHere')}
+        </RowAction>
       </View>
 
       <View style={settingsStyles.block}>
         <SettingRow label={t('settings.location')} c={c}>
-          <View style={styles.locStatusWrap}>
-            <View
-              style={[styles.locDot, { backgroundColor: locPerm?.granted ? '#2FBF71' : c.accent }]}
-            />
-            <Text style={[styles.locValue, { color: c.text }]}>
-              {locPerm === null
+          <Status
+            on={locPerm?.granted === true}
+            // Null is NOT "off". The provider can be missing entirely (some
+            // browsers) and the permission is then genuinely unknown —
+            // painting that the same red as a blocked permission claims a
+            // problem nobody has verified.
+            unknown={locPerm === null}
+            label={
+              locPerm === null
                 ? t('settings.locationUnknown')
                 : locPerm.granted
                   ? t('settings.locationOn')
                   : locPerm.canAskAgain
                     ? t('settings.locationNotSet')
-                    : t('settings.locationOff')}
-            </Text>
-          </View>
+                    : t('settings.locationOff')
+            }
+            c={c}
+          />
         </SettingRow>
         <Hint c={c}>
           {locPerm?.granted ? t('settings.locationOnHint') : t('settings.locationOffHint')}
         </Hint>
         {locPerm !== null && !locPerm.granted && (
-          <Pressable onPress={onFixLocation} disabled={locBusy} accessibilityRole="button" hitSlop={10}>
-            <Text style={[styles.locAction, { color: c.accent, opacity: locBusy ? 0.5 : 1 }]}>
-              {locPerm.canAskAgain
-                ? t('settings.locationEnable')
-                : Platform.OS === 'web'
-                  ? t('settings.locationBrowserBlocked')
-                  : t('settings.locationOpenSettings')}
-            </Text>
-          </Pressable>
+          <RowAction onPress={onFixLocation} busy={locBusy} c={c}>
+            {locPerm.canAskAgain
+              ? t('settings.locationEnable')
+              : Platform.OS === 'web'
+                ? t('settings.locationBrowserBlocked')
+                : t('settings.locationOpenSettings')}
+          </RowAction>
         )}
       </View>
     </SettingsPage>
   );
 }
 
+/**
+ * The state of a setting, in the slot to the right of its label.
+ *
+ * That slot means STATUS on this page and nothing else, which is the point
+ * of this component existing. Before 2026-09-09 the two blocks used it for
+ * opposite things: Location put its state there (a dot and "On"), while
+ * Privacy zone put its ACTION there — a red "Remove" — and stated whether it
+ * was on at all in the first word of the paragraph below. Reported as "On is
+ * signaled within the text and is not notorious at all, and instead of being
+ * in the same place as location, the remove button is there."
+ *
+ * Reading down the page, the eye landed on a red word in the position where
+ * the row underneath showed a green state. The most prominent thing in the
+ * block was the way to switch the protection OFF.
+ */
+function Status({
+  on,
+  unknown = false,
+  label,
+  c,
+}: {
+  on: boolean;
+  unknown?: boolean;
+  label: string;
+  c: Record<ThemeColor, string>;
+}) {
+  return (
+    <View style={styles.statusWrap}>
+      <View
+        style={[
+          styles.statusDot,
+          { backgroundColor: unknown ? c.textSecondary : on ? STATUS_ON : c.accent },
+        ]}
+      />
+      <Text style={[styles.statusValue, { color: c.text }]}>{label}</Text>
+    </View>
+  );
+}
+
+/**
+ * The way to CHANGE a setting: always under its hint, never in the status
+ * slot. The counterpart to Status, and the other half of the same rule.
+ *
+ * Below the hint rather than beside the label because the hint is what
+ * argues for pressing it — "without a privacy zone, the exact start and end
+ * of your sessions are uploaded" is the reason "Use my location" is there,
+ * and an action above its own reason reads as a switch rather than a choice.
+ */
+function RowAction({
+  onPress,
+  busy,
+  c,
+  children,
+}: {
+  onPress: () => void;
+  busy: boolean;
+  c: Record<ThemeColor, string>;
+  children: string;
+}) {
+  return (
+    <Pressable onPress={onPress} disabled={busy} accessibilityRole="button" hitSlop={10}>
+      <Text style={[styles.action, { color: c.accent, opacity: busy ? 0.5 : 1 }]}>{children}</Text>
+    </Pressable>
+  );
+}
+
+/** The "this is on and working" green. Local to this screen: it is the only
+ *  place in the app that paints a status dot, and constants/theme.ts has no
+ *  positive colour to belong to — every other accent there is the one red.
+ *  Promote it if a second screen ever needs it. */
+const STATUS_ON = '#2FBF71';
+
 const styles = StyleSheet.create({
-  locStatusWrap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
-  locDot: { width: 8, height: 8, borderRadius: 4 },
-  locValue: { fontSize: 15, fontWeight: '600' },
-  locAction: { fontSize: 14, fontWeight: '700' },
+  statusWrap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusValue: { fontSize: 15, fontWeight: '600' },
+  action: { fontSize: 14, fontWeight: '700' },
 });
