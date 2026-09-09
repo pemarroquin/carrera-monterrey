@@ -165,64 +165,17 @@ export interface TileOwnerRow {
   flagged: boolean;
 }
 
-export interface TileLeaderboardEntry {
-  userId: string;
-  displayName: string | null;
-  /** Tiles this user currently owns — Layer 1's "permanent progression"
-   *  number (brief §1.5). Not a percentage: that needs §1's real
-   *  municipio/runnable-tile denominator, explicitly out of scope this
-   *  pass — see index.tsx and the executor's report. */
-  tileCount: number;
-  /** How many of tileCount came from a run the speed trigger flagged. */
-  flaggedTileCount: number;
-}
+// rankByTileCount and TileLeaderboardEntry lived here and are DELETED, not
+// deprecated: districtConquest replaced them outright when the leaderboard
+// stopped ranking by a raw tile count over a whole metro. Nothing imported
+// them any more — the two remaining mentions in this repo are comments.
+//
+// Not deleted alongside them, deliberately: rankByArea / unionAreaM2 /
+// regionsWithRuns above. Those were already dead before this change (the
+// tile-coverage model replaced them) and a prior brief explicitly said to
+// keep them and their ~30 tests through that migration. Removing them is a
+// separate decision and not this branch's to make.
 
-/**
- * Ranks users by tiles owned, descending. `regionId` narrows to tiles
- * claimed by a run tagged with that region (the SAME coarse metro string as
- * rankByArea's `regionId` param — see TileOwnerRow.regionId's own doc);
- * pass null for the global board. Ties broken by user id for a stable order
- * between loads, same reasoning as rankByArea.
- *
- * A user with zero tiles in the selected region drops off entirely, same
- * "a regional board is a claim about that metro" reasoning as rankByArea.
- */
-export function rankByTileCount(
-  tiles: TileOwnerRow[],
-  regionId: string | null,
-): TileLeaderboardEntry[] {
-  const byUser = new Map<
-    string,
-    { displayName: string | null; tileCount: number; flaggedTileCount: number }
-  >();
-  for (const tile of tiles) {
-    if (regionId !== null && tile.regionId !== regionId) continue;
-    const existing = byUser.get(tile.ownerId);
-    if (existing) {
-      existing.tileCount++;
-      if (tile.flagged) existing.flaggedTileCount++;
-      // Any row's name will do (they all come from the same profile row) —
-      // fill in a set one over a null in case of a partial join, same as
-      // rankByArea.
-      if (existing.displayName === null && tile.displayName !== null) {
-        existing.displayName = tile.displayName;
-      }
-    } else {
-      byUser.set(tile.ownerId, {
-        displayName: tile.displayName,
-        tileCount: 1,
-        flaggedTileCount: tile.flagged ? 1 : 0,
-      });
-    }
-  }
-
-  const entries: TileLeaderboardEntry[] = [];
-  for (const [userId, v] of byUser) {
-    entries.push({ userId, ...v });
-  }
-  entries.sort((a, b) => b.tileCount - a.tileCount || a.userId.localeCompare(b.userId));
-  return entries;
-}
 
 // ============================================================================
 // BOARD 1 — CONQUEST, as a share of the district's park paths

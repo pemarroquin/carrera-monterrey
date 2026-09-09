@@ -189,7 +189,7 @@ export function rankMayors(
   for (const visit of scoped) {
     // First non-null wins — a partial profile join leaves some rows null,
     // same "the count is the point, the name is a garnish" posture as
-    // rankByTileCount.
+    // districtConquest.
     if (nameById.get(visit.userId) == null && visit.displayName !== null) {
       nameById.set(visit.userId, visit.displayName);
     } else if (!nameById.has(visit.userId)) {

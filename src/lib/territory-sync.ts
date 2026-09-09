@@ -769,7 +769,7 @@ export type TileLeaderboardOutcome =
   | { ok: false; reason: 'disabled' | 'auth' | 'network' };
 
 /**
- * Every claimed tile + its owner, for leaderboard.ts's rankByTileCount to
+ * Every claimed tile + its owner, for leaderboard.ts's districtConquest to
  * aggregate on device — same "aggregate client-side, fine at pilot scale"
  * posture as fetchLeaderboard above (leaderboard.ts's own header explains
  * why: PostgREST can't express a GROUP BY, and migrations here are applied
