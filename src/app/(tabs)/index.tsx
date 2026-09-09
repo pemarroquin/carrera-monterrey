@@ -400,6 +400,15 @@ export default function TrackScreen() {
   // it on every single 2s fix for a 30+ minute run would redo that work for
   // nothing new most of the time.
   const [liveTiles, setLiveTiles] = useState<string[]>([]);
+  // The enclosure gain, kept SEPARATE from liveTiles rather than merged into
+  // it (which is what this effect used to do). Ground you ran over and
+  // ground you captured by closing a loop around it are two different
+  // claims, and the live map now says so: the captured area shimmers
+  // through the gradient wheel to mark it as conquered, the run-over ground
+  // holds the run's own solid colour. Merging them into one array made that
+  // distinction unrecoverable downstream. Mirrors the finished-run split
+  // sessionTiles/sessionEnclosed already uses.
+  const [liveEnclosed, setLiveEnclosed] = useState<string[]>([]);
   const liveTilesThrottleRef = useRef({ atMs: 0, pointCount: 0 });
   useEffect(() => {
     // Deferred by a tick, not called straight from the effect body — same
@@ -414,6 +423,7 @@ export default function TrackScreen() {
         // branch in track-map.web.tsx).
         liveTilesThrottleRef.current = { atMs: 0, pointCount: 0 };
         setLiveTiles((prev) => (prev.length > 0 ? [] : prev));
+        setLiveEnclosed((prev) => (prev.length > 0 ? [] : prev));
         return;
       }
       const now = Date.now();
@@ -430,16 +440,21 @@ export default function TrackScreen() {
         // Guarded for the same reason the finished-run effect is, and more
         // urgently: this runs every throttle tick for the whole length of a
         // session, so an h3 failure on one odd shape would throw repeatedly
-        // mid-run. Falling back to the covered cells alone shows less than
-        // the runner owns, which is the safe direction — the claim itself is
-        // computed separately at save time.
-        let withEnclosure = live;
+        // mid-run. Falling back to no enclosure shows less than the runner
+        // owns, which is the safe direction — the claim itself is computed
+        // separately at save time.
+        //
+        // enclosedCells excludes anything already in `live` (its own
+        // contract), so these two sets are disjoint and neither the fill
+        // nor any count double-counts a cell.
+        let enclosed: string[] = [];
         try {
-          withEnclosure = [...live, ...enclosedCells(live, DEFAULT_TILE_RES)];
+          enclosed = enclosedCells(live, DEFAULT_TILE_RES);
         } catch {
-          withEnclosure = live;
+          enclosed = [];
         }
-        setLiveTiles(withEnclosure);
+        setLiveTiles(live);
+        setLiveEnclosed(enclosed);
       }
     }, 0);
     return () => clearTimeout(id);
@@ -865,9 +880,10 @@ export default function TrackScreen() {
         active={inSession}
         fenceColor={fenceColor}
         // Tile Coverage brief §6 step 4 — this session's live covered
-        // cells, throttled the same as the (unchanged) live enclosure fill;
-        // see the liveTiles state's own comment above.
+        // cells; see the liveTiles state's own comment above for the
+        // throttle, and liveEnclosed's for why the two arrive separately.
         tiles={liveTiles}
+        enclosedTiles={liveEnclosed}
         dark={scheme === 'dark'}
         color={c.accent}
         placeholder={t('track.waiting')}

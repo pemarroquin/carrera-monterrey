@@ -62,6 +62,7 @@ import {
   EMISSIVE_STRENGTH_FULL,
   FENCE_LAG_M,
   FENCE_RISE_MS,
+  FENCE_SHIMMER_STEP_MS,
   FENCE_WALL_COLOR,
   FENCE_WALL_HEIGHT_M,
   FENCE_WALL_OPACITY,
@@ -77,6 +78,7 @@ import {
   ROUTE_GLOW_OPACITY,
   ROUTE_GLOW_WIDTH,
   ROUTE_GRADIENT,
+  ROUTE_GRADIENT_COLORS,
   ROUTE_LINE_COLOR,
   ROUTE_LINE_WIDTH,
   SESSION_FLY_MS,
@@ -111,6 +113,7 @@ const MAPBOX_CSS_URL = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlPkg.versi
 const ROUTE_SRC = 'run-route';
 const WALL_SRC = 'run-wall';
 const TILES_SRC = 'run-tiles';
+const ENCLOSED_SRC = 'run-enclosed';
 const PULSE_STYLE_ID = 'track-pulse-style';
 
 /**
@@ -172,6 +175,17 @@ interface TrackMapProps {
    *  component's own report note on why that effect was left untouched
    *  rather than folding this in. */
   tiles: string[];
+  /** The cells claimed by CLOSING A LOOP around them rather than by being
+   *  run over — enclosure.ts's enclosedCells, computed and throttled in
+   *  index.tsx alongside `tiles`, and disjoint from it.
+   *
+   *  Its own prop, and its own layer, because it gets its own treatment:
+   *  captured ground shimmers through the gradient wheel to mark it as
+   *  conquered while run-over ground holds the run's solid identity colour
+   *  (Pedro's ask, 2026-09-08). Disjoint matters — the two fills are
+   *  siblings, not stacked, so neither region ever blends two translucent
+   *  fills and reads muddier than the other. */
+  enclosedTiles: string[];
   dark: boolean;
   color: ColorValue;
   placeholder: string;
@@ -237,6 +251,7 @@ export function TrackMap({
   active,
   fenceColor,
   tiles,
+  enclosedTiles,
   placeholder,
   placeholderColor,
   unavailable,
@@ -259,6 +274,8 @@ export function TrackMap({
   // The gradient flow owns its own timer (gradient-flow.ts); this holds its
   // stopper rather than an interval id.
   const routeFlowStopRef = useRef<(() => void) | null>(null);
+  // The conquered-ground shimmer's own interval — see the ENCLOSED_SRC layer.
+  const shimmerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Camera control during a session (Task D / P4). preferredZoom is a REF,
   // not state: the zoom buttons (and now pinch-zoom, see the gesture effect
@@ -473,6 +490,12 @@ export function TrackMap({
           type: 'geojson',
           data: { type: 'FeatureCollection', features: [] },
         });
+        // Ground captured by closing a loop around it, as its own source so
+        // it can carry the conquered shimmer — see the `enclosedTiles` prop.
+        map.addSource(ENCLOSED_SRC, {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
 
         map.addLayer({
           id: `${ROUTE_SRC}-glow`,
@@ -527,6 +550,37 @@ export function TrackMap({
             // per-run), so the real per-run colour is applied by the
             // fenceColor-sync effect, not baked in here.
             'fill-color': FENCE_WALL_COLOR,
+            'fill-opacity': TILE_FILL_OPACITY,
+            'fill-emissive-strength': EMISSIVE_STRENGTH_FULL,
+          },
+        });
+
+        // Conquered ground. Same slot and opacity as TILES_SRC above and
+        // added right after it, so the two fills sit at the same depth and
+        // read as one continuous territory — what separates them is COLOUR,
+        // not stacking: this one sweeps the ROUTE_GRADIENT wheel while the
+        // run-over ground holds the run's own identity colour.
+        //
+        // `fill-color-transition` is where the shimmer's smoothness comes
+        // from. The interval below only advances the hue one step every
+        // FENCE_SHIMMER_STEP_MS; GL interpolates between each pair on the
+        // GPU. That is the whole reason this can be a 2.2s timer instead of
+        // a requestAnimationFrame loop — see the pulse-dot comment above
+        // for why a per-frame map repaint is the specific trap here.
+        //
+        // Mapbox has no positional gradient for fills at all (only lines
+        // take `line-gradient`), so a fill can only sweep the wheel through
+        // TIME. Same technique, same constant, as a saved territory's
+        // shimmer in territories-map.web.tsx — deliberately, so the live
+        // capture and the saved territory it becomes read as the same thing.
+        map.addLayer({
+          id: ENCLOSED_SRC,
+          type: 'fill',
+          source: ENCLOSED_SRC,
+          slot: MAP_SLOT_FILL,
+          paint: {
+            'fill-color': ROUTE_GRADIENT_COLORS[0],
+            'fill-color-transition': { duration: FENCE_SHIMMER_STEP_MS, delay: 0 },
             'fill-opacity': TILE_FILL_OPACITY,
             'fill-emissive-strength': EMISSIVE_STRENGTH_FULL,
           },
@@ -611,9 +665,35 @@ export function TrackMap({
       map.setPaintProperty(ROUTE_SRC, 'line-gradient', gradient);
     });
 
+    // The conquered-ground shimmer. One step of the wheel per tick; GL
+    // tweens between steps via the layer's own fill-color-transition, so
+    // this is ~0.45 setPaintProperty calls a second for the whole run.
+    //
+    // Armed on `active` alongside the flow above and not gated on the
+    // enclosure being non-empty, deliberately: an empty source paints
+    // nothing, so a tick against one costs a paint property assignment and
+    // no pixels, and the alternative — arming and tearing down on
+    // enclosedTiles.length — would re-arm the timer at the exact moment the
+    // first capture appears, restarting the phase and making the first
+    // shimmer the one that stutters. The idle pre-session map is what the
+    // `active` gate is protecting (see this effect's own header).
+    let shimmerStep = 0;
+    shimmerIntervalRef.current = setInterval(() => {
+      shimmerStep = (shimmerStep + 1) % ROUTE_GRADIENT_COLORS.length;
+      map.setPaintProperty(ENCLOSED_SRC, 'fill-color', ROUTE_GRADIENT_COLORS[shimmerStep]);
+    }, FENCE_SHIMMER_STEP_MS);
+
     return () => {
       routeFlowStopRef.current?.();
       routeFlowStopRef.current = null;
+      if (shimmerIntervalRef.current) clearInterval(shimmerIntervalRef.current);
+      shimmerIntervalRef.current = null;
+      // Back to a colour, not left mid-sweep: this component outlives a
+      // session, so the next one would otherwise open on whatever hue the
+      // last tick happened to land on.
+      if (map.getLayer(ENCLOSED_SRC)) {
+        map.setPaintProperty(ENCLOSED_SRC, 'fill-color', ROUTE_GRADIENT_COLORS[0]);
+      }
     };
   }, [active]);
 
@@ -774,6 +854,12 @@ export function TrackMap({
   // Per-run fence colour. The wall and tile layers are created once at mount
   // (before any session exists) with the default FENCE_WALL_COLOR, so the
   // run's own colour is applied as a paint update — cheap, no layer churn.
+  //
+  // ENCLOSED_SRC is deliberately NOT in here. Captured ground carries the
+  // shimmer instead of the run's identity colour — that contrast IS the
+  // signal that it was conquered rather than covered. Adding it here would
+  // paint over the shimmer's hue on every fenceColor/active change and the
+  // effect would read as an intermittent flicker, not as a bug.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
@@ -801,10 +887,22 @@ export function TrackMap({
     // blend twice, so running a street three times drew it three times as
     // dark. Reported 2026-09-07: the fence should mark total area, not how
     // often it was crossed.
-    const footprint = tileFeatureCollection(tiles);
-    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(footprint);
-    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(footprint);
-  }, [tiles]);
+    //
+    // The WALL is the whole territory's raised edge, so it takes the UNION
+    // of run-over and captured ground — a wall drawn around only the ground
+    // you ran would cut straight through the middle of a closed loop. The
+    // flat fills stay split, one per source, so each region has exactly one
+    // fill and the shimmer is not blended over a second translucent layer.
+    (map.getSource(TILES_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection(tiles),
+    );
+    (map.getSource(ENCLOSED_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection(enclosedTiles),
+    );
+    (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(
+      tileFeatureCollection([...tiles, ...enclosedTiles]),
+    );
+  }, [tiles, enclosedTiles]);
 
   // Feed coordinates in. setData on an existing source is the cheap path —
   // no layer or style churn, so the line simply extends.
