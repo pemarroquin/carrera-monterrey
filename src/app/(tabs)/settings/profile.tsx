@@ -1,22 +1,43 @@
-// Settings › Profile — the name shown on the territory leaderboard.
+// Settings › Profile — everything about WHO the runner is, on one page:
+// their account, the diagnostics for it, and the name they appear under.
 //
-// Moved out of the old single-file settings screen unchanged: same
-// refetch-on-focus effect, same lastSyncedName dirty check, same save-on-blur.
-// `useIsFocused` now means "this sub-page is on top of the settings stack"
-// rather than "the settings tab is selected", which is if anything a tighter
-// fit for the reason the effect exists — NamePrompt (the run-summary flow)
-// can write display_name from off-screen while this screen stays mounted.
+// The account controls used to be a sibling page (/settings/account) reached
+// by its own row. Pedro's call, 2026-09-09: fold them in here, in that order.
+// They are three answers to one question, and splitting them meant a runner
+// whose territory had gone missing had to guess which of two rows to open —
+// while Diagnostics, the screen that answers it, lived under the row they
+// did not pick.
+//
+// Order is deliberate and is the order of escalation: what account am I
+// (AccountLink) → what does the server actually hold for it
+// (IdentityDiagnostic) → what do other people see (the leaderboard name).
+// Each section carries its own heading; see Section below for why they are
+// not index.tsx's GroupLabel.
+//
+// The name field itself moved out of the old single-file settings screen
+// unchanged: same refetch-on-focus effect, same lastSyncedName dirty check,
+// same save-on-blur. `useIsFocused` now means "this sub-page is on top of
+// the settings stack" rather than "the settings tab is selected", which is
+// if anything a tighter fit for the reason the effect exists — NamePrompt
+// (the run-summary flow) can write display_name from off-screen while this
+// screen stays mounted.
 import { useIsFocused } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { AccountLink } from '@/components/account-link';
+import { IdentityDiagnostic } from '@/components/identity-diagnostic';
 import { SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
-import { Spacing } from '@/constants/theme';
+import { Spacing, type ThemeColor } from '@/constants/theme';
 import { useI18n } from '@/lib/i18n';
 import { getCachedDisplayName } from '@/lib/profile-cache';
+import { TERRITORY_ENABLED } from '@/lib/supabase';
 import { DISPLAY_NAME_MAX, fetchMyProfile, updateDisplayName } from '@/lib/territory-sync';
 
-export default function ProfileSettingsScreen() {
+/** The leaderboard name field — the third section, and the only one with
+ *  state of its own. */
+function LeaderboardName() {
   const { c } = useSettingsColors();
   const { t } = useI18n();
   const isFocused = useIsFocused();
@@ -157,13 +178,22 @@ export default function ProfileSettingsScreen() {
     void saveName();
   }, [hasExistingName, saveName]);
 
-  // A build with no server configured has no name that can save. The row
-  // leading here is already hidden in that case (see ./index.tsx); this is
-  // the belt-and-braces for a direct /settings/profile URL on web.
-  if (nameState === 'off') return <SettingsPage>{null}</SettingsPage>;
+  // A build with no server configured has no name that can save. Only the
+  // LEADERBOARD section goes — not the page. It used to return an empty
+  // SettingsPage, which was correct when the name was all this screen held;
+  // now that would take the account controls and the diagnostics down with
+  // it, and diagnostics is precisely what someone on a misconfigured build
+  // needs to see. AccountLink already hides itself under the same condition,
+  // so each section answers for itself.
+  if (nameState === 'off') return null;
 
+  // This section renders its own heading rather than being wrapped in one by
+  // the page, because the page cannot know it is off — `nameState` lives
+  // here. A Section wrapping a component that returned null would leave a
+  // heading standing over nothing, which reads as a section that failed to
+  // load rather than one that does not apply.
   return (
-    <SettingsPage>
+    <Section label={t('settings.sectionLeaderboard')} c={c}>
       <View style={settingsStyles.block}>
         <Text style={[settingsStyles.label, { color: c.textSecondary }]}>
           {t('settings.displayName')}
@@ -230,6 +260,56 @@ export default function ProfileSettingsScreen() {
           </View>
         )}
       </View>
+    </Section>
+  );
+}
+
+/**
+ * A labelled section of this page.
+ *
+ * Not index.tsx's GroupLabel/GroupBreak, though it speaks the same visual
+ * language on purpose — that pair is tuned for a FULL-BLEED list of rows and
+ * carries its own horizontal padding, while this sits inside SettingsPage's
+ * already-padded content. Sharing one component would mean a padding prop
+ * whose two values are "row list" and "content page", which is two
+ * components wearing a trench coat. Kept local per settings-ui.tsx's own
+ * rule: what one page uses stays in that page.
+ */
+function Section({
+  label,
+  c,
+  children,
+}: {
+  label: string;
+  c: Record<ThemeColor, string>;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
+export default function ProfileSettingsScreen() {
+  const { c } = useSettingsColors();
+  const { t } = useI18n();
+  // The row leading here is already hidden on a build with no server (see
+  // ./index.tsx's TERRITORY_ENABLED gate); this is the belt-and-braces for a
+  // direct /settings/profile URL on web, carried over from the version of
+  // this screen that held only the name field. Both components below hide
+  // themselves under the same condition, but their HEADINGS would not.
+  if (!TERRITORY_ENABLED) return <SettingsPage>{null}</SettingsPage>;
+  return (
+    <SettingsPage>
+      <Section label={t('settings.accountTitle')} c={c}>
+        <AccountLink c={c} />
+      </Section>
+      <Section label={t('settings.diagnosticTitle')} c={c}>
+        <IdentityDiagnostic c={c} />
+      </Section>
+      <LeaderboardName />
     </SettingsPage>
   );
 }
@@ -238,6 +318,10 @@ export default function ProfileSettingsScreen() {
 // commit, plain text for the way out) — the two forms sit on the same
 // Settings surface and should not look like two different apps.
 const styles = StyleSheet.create({
+  section: { marginBottom: Spacing.five, gap: Spacing.two },
+  // Matches index.tsx's groupLabel type scale so the two Settings surfaces
+  // read as one app; the padding differs because the context does.
+  sectionLabel: { fontSize: 15, fontWeight: '600' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.four, marginTop: Spacing.one },
   saveButton: {
     paddingVertical: Spacing.two,

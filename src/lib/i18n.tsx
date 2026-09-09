@@ -522,13 +522,13 @@ const translations = {
       // and the one-line description under each row.
       groupAccount: 'Cuenta',
       groupApp: 'Aplicación',
-      navProfileHint: 'Tu nombre en la tabla de posiciones',
-      navAccountHint: 'Vincula tu correo para no perder tu territorio',
+      navProfileHint: 'Tu cuenta, tu diagnóstico y tu nombre en la tabla',
       navPreferencesHint: 'Apariencia, idioma y recordatorios',
       navLocationHint: 'Permiso de ubicación y tu zona privada',
       navPrivacyHint: 'Qué recopilamos y qué no',
       navAboutHint: 'Versión y soporte',
       accountTitle: 'Tu cuenta',
+      sectionLeaderboard: 'Tabla de posiciones',
       accountBody:
         'Este dispositivo tiene una cuenta anónima para guardar tus territorios. Si cambias de navegador, de dispositivo o se borran los datos del sitio, esa cuenta —y el territorio que tenga guardado— deja de aparecer. Agrega tu correo para que tu progreso te siga a donde entres.',
       accountEmailPlaceholder: 'tu@correo.com',
@@ -991,13 +991,13 @@ const translations = {
       // themselves have no new keys.
       groupAccount: 'Account',
       groupApp: 'App',
-      navProfileHint: 'Your name on the leaderboard',
-      navAccountHint: 'Link your email so you keep your territory',
+      navProfileHint: 'Your account, its diagnostics, and your leaderboard name',
       navPreferencesHint: 'Appearance, language and reminders',
       navLocationHint: 'Location permission and your privacy zone',
       navPrivacyHint: 'What we collect and what we don’t',
       navAboutHint: 'Version and support',
       accountTitle: 'Your account',
+      sectionLeaderboard: 'Leaderboard',
       accountBody:
         "This device has an anonymous account for saving your territories. Switch browsers or devices, or clear site data, and that account — and any territory it holds — stops showing up. Add your email so your progress follows you wherever you sign in.",
       accountEmailPlaceholder: 'you@email.com',
