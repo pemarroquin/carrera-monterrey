@@ -132,11 +132,19 @@ indistinguishable from one reading 0% because nobody ran.
 
 ## Gotchas this repo has actually shipped
 
-- **`park_path_cells` is EMPTY in production.** The schema migration ran; the
-  36,193-row data migration (`20260908211500_park_paths_data.sql`) never did.
-  So "Park-path progress per municipio" renders nothing — the RPC returns
-  `[]`, not an error. Apply it by hand. This is the standing failure mode
-  here: an unapplied migration reads as an honest `0`.
+- **A data migration can be too big for the SQL editor.** `park_path_cells`
+  sat empty for a day after the schema shipped because
+  `20260908211500_park_paths_data.sql` is 1.4 MB and the Supabase SQL editor
+  refuses anything near ~1 MB ("Query is too large to be run via the SQL
+  Editor") — so "Park-path progress per municipio" rendered nothing, the RPC
+  returning `[]` rather than an error. Loaded 2026-09-09 (36,193 cells, every
+  municipio matching its `park_path_stats` denominator). Re-split a refreshed
+  extraction with `node scripts/split-park-paths-sql.mjs [--bytes N]`: it
+  emits ~300 KB chunks into the gitignored
+  `supabase/generated/park-paths-chunks/` as `unnest(array[...])` (~2.3x
+  denser than one tuple per row), idempotent and order-independent. Confirm
+  with a live count — this is the standing failure mode here: an unapplied
+  migration reads as an honest `0`.
 - **A ref cannot wake an effect.** `track-map.web.tsx` gated eight effects on
   a `readyRef`; two of them depended only on `active` and so never ran at all
   when a session started before the map loaded — silently removing the
