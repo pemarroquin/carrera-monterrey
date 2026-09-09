@@ -7,15 +7,28 @@
 // possible under first-to-claim (one tile has exactly one owner, ever).
 import { describe, expect, it } from 'vitest';
 
+import { latLngToCell } from 'h3-js';
+
 import { rankByTileCount, type TileOwnerRow } from '../src/lib/leaderboard';
+
+// A DISTINCT, real res-12 cell per row. territory_tiles' primary key is h3,
+// so two rows can never share one — a helper that handed out the same id
+// would let a test assert something the database cannot produce. Walks east
+// in ~40 m steps, comfortably more than one res-12 cell (~10.8 m edge).
+let cellSeq = 0;
+function nextCell(): string {
+  cellSeq++;
+  return latLngToCell(25.6866, -100.3161 + cellSeq * 0.0004, 12);
+}
 
 function tile(
   ownerId: string,
   regionId: string | null = 'mty',
   displayName: string | null = null,
   flagged = false,
+  h3: string = nextCell(),
 ): TileOwnerRow {
-  return { ownerId, displayName, regionId, flagged };
+  return { h3, ownerId, displayName, regionId, flagged };
 }
 
 describe('rankByTileCount', () => {

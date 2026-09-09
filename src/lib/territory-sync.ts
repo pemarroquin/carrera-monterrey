@@ -848,6 +848,7 @@ export async function fetchTileLeaderboard(): Promise<TileLeaderboardOutcome> {
       // `profiles` embed — depends on how PostgREST infers the relationship.
       const runRel = Array.isArray(row.runs) ? row.runs[0] : row.runs;
       tiles.push({
+        h3: row.h3,
         ownerId: row.owner_id,
         displayName: nameById.get(row.owner_id) ?? null,
         regionId: row.region_id ?? null,

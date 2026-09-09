@@ -26,6 +26,8 @@ import { featureCollection } from '@turf/helpers';
 import union from '@turf/union';
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
 
+import { districtOfCell } from '@/lib/district';
+
 export interface LeaderboardRun {
   userId: string;
   displayName: string | null;
@@ -146,6 +148,9 @@ export function regionsWithRuns(runs: LeaderboardRun[]): string[] {
  *  and the flagged status of the run that claimed it — see
  *  territory-sync.ts's fetchTileLeaderboard for how this is assembled. */
 export interface TileOwnerRow {
+  /** The cell itself. Was fetched and discarded before districtConquest
+   *  needed it — the district filter and the map both key off it. */
+  h3: string;
   ownerId: string;
   displayName: string | null;
   regionId: string | null;
@@ -214,4 +219,132 @@ export function rankByTileCount(
   }
   entries.sort((a, b) => b.tileCount - a.tileCount || a.userId.localeCompare(b.userId));
   return entries;
+}
+
+// ============================================================================
+// BOARD 1 — CONQUEST, as a share of the district's park paths
+// ============================================================================
+//
+// What the board shows changed from a raw tile count to a PERCENTAGE, at
+// Pedro's ask: "% of parks conquered in the municipio I'm located at,
+// period." Two substitutions were needed to deliver that, and both are
+// deliberate:
+//
+//   municipio -> DISTRICT. Nothing can resolve a lat/lng to a municipio and
+//   the cheap substitute measured 21.3% ambiguous. See district.ts's header
+//   for the full reasoning and the games precedent.
+//
+//   "parks" -> PARK PATHS, which is the denominator park_paths.sql already
+//   measured as the only one that moves: one 5.7 km run is 0.262% of San
+//   Pedro's area, 0.63% of its street network, and 5.5% of its park paths.
+//
+// CONQUERED, NOT VISITED — and this is the one place where this board and
+// the `municipio_progress` RPC that shipped the same week deliberately
+// disagree. That RPC counts visits, on purpose, because it is a personal
+// record of where someone went. This is a contest over ground, so it counts
+// what a runner OWNS: territory_tiles.owner_id. The two numbers will differ
+// for the same runner (enclosure can hand you park paths you never set foot
+// on) and neither is wrong.
+//
+// Zero migrations, which is why it is here rather than in SQL: every tile's
+// h3 + owner_id is already fetched by fetchTileLeaderboard, and park cells
+// are H3-keyed, so the whole thing is a set intersection on data in memory.
+// Migrations in this project are applied BY HAND and an unapplied one reads
+// as an honest zero (see CLAUDE.md, and the backlog's own warnings) — a
+// leaderboard that says 0% because nobody ran the SQL is indistinguishable
+// from one that says 0% because nobody ran.
+
+export interface ConquestEntry {
+  userId: string;
+  displayName: string | null;
+  /** Park-path cells in this district that this runner currently owns. */
+  parkCellsHeld: number;
+  /** Share of the district's park paths, 0-1. Zero when the district has no
+   *  park data at all — see districtConquest's `hasDenominator`. */
+  share: number;
+  /** Every owned cell in the district, park or not. The honest "ground held"
+   *  number, kept because the percentage alone hides a runner who covers
+   *  streets rather than parks. */
+  cellsHeld: number;
+  flaggedCellsHeld: number;
+}
+
+export interface DistrictConquest {
+  entries: ConquestEntry[];
+  /** Park-path cells inside the district — the denominator. */
+  parkCellTotal: number;
+  /**
+   * False when the district has no park-path cells, which is most of the
+   * planet (only seven Nuevo León municipios are extracted). Callers MUST
+   * branch on this and show cells held instead of a percentage: a share of
+   * nothing is 0/0, and rendering that as "0%" would tell a runner who just
+   * covered their whole neighbourhood that they hold none of it.
+   */
+  hasDenominator: boolean;
+}
+
+/**
+ * Board 1 for one district.
+ *
+ * `parkCells` is the district's park-path cell set (see fetchParkCells) —
+ * passed in rather than fetched so this stays pure and testable.
+ *
+ * Ranked by park share where there is a denominator, and by raw cells held
+ * where there is not, so the ordering always matches the number on screen.
+ * Ties broken by user id for a stable order between loads, same reasoning as
+ * rankByTileCount.
+ */
+export function districtConquest(
+  tiles: TileOwnerRow[],
+  district: string,
+  parkCells: Set<string>,
+): DistrictConquest {
+  const byUser = new Map<
+    string,
+    { displayName: string | null; parkCellsHeld: number; cellsHeld: number; flaggedCellsHeld: number }
+  >();
+
+  for (const tile of tiles) {
+    // districtOfCell also rejects any cell not at the tile resolution, so an
+    // unconverted res-11 tile is excluded here rather than being counted
+    // into a district it would inflate.
+    if (districtOfCell(tile.h3) !== district) continue;
+    let entry = byUser.get(tile.ownerId);
+    if (!entry) {
+      entry = {
+        displayName: tile.displayName,
+        parkCellsHeld: 0,
+        cellsHeld: 0,
+        flaggedCellsHeld: 0,
+      };
+      byUser.set(tile.ownerId, entry);
+    }
+    entry.cellsHeld++;
+    if (tile.flagged) entry.flaggedCellsHeld++;
+    if (parkCells.has(tile.h3)) entry.parkCellsHeld++;
+    if (entry.displayName === null && tile.displayName !== null) {
+      entry.displayName = tile.displayName;
+    }
+  }
+
+  const parkCellTotal = parkCells.size;
+  const hasDenominator = parkCellTotal > 0;
+
+  const entries: ConquestEntry[] = [...byUser.entries()]
+    .map(([userId, agg]) => ({
+      userId,
+      displayName: agg.displayName,
+      parkCellsHeld: agg.parkCellsHeld,
+      share: hasDenominator ? agg.parkCellsHeld / parkCellTotal : 0,
+      cellsHeld: agg.cellsHeld,
+      flaggedCellsHeld: agg.flaggedCellsHeld,
+    }))
+    .sort((a, b) => {
+      const primary = hasDenominator
+        ? b.parkCellsHeld - a.parkCellsHeld
+        : b.cellsHeld - a.cellsHeld;
+      return primary || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0);
+    });
+
+  return { entries, parkCellTotal, hasDenominator };
 }
