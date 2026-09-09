@@ -48,8 +48,9 @@ import { Icon } from '@/components/ui/icon';
 import { FENCE_COLOR_SETS } from '@/constants/map';
 import { BottomTabInset, Colors, Spacing, type ThemeColor } from '@/constants/theme';
 import { onIdentityChanged } from '@/lib/auth-events';
-import { fetchDistrictParkCells, fetchDistrictVisits, type ParkCell } from '@/lib/boards';
-import { districtLabel, districtOf, districtOfCell } from '@/lib/district';
+import { fetchDistrictVisits } from '@/lib/boards';
+import { districtOf, districtOfCell } from '@/lib/district';
+import { nearestRegion } from '@/lib/regions';
 import { useI18n } from '@/lib/i18n';
 import { districtConquest, type TileOwnerRow } from '@/lib/leaderboard';
 import {
@@ -62,19 +63,11 @@ import { useCurrentLocation } from '@/lib/use-current-location';
 import { fetchTileLeaderboard } from '@/lib/territory-sync';
 
 /** Everything the screen needs, resolved together. `null` is "not loaded
- *  yet"; a failed piece keeps the others — a district with no park data must
- *  still show who holds it. */
+ *  yet"; a failed visits read keeps the rest — Local Leaders going empty
+ *  must not take the conquest board with it. */
 interface BoardData {
   tiles: TileOwnerRow[] | null;
   meUserId: string | null;
-  parkCells: Set<string>;
-  parkRows: ParkCell[];
-  /** The park read FAILED, as opposed to the district simply having no park
-   *  data. Without this the two are indistinguishable: both leave parkCells
-   *  empty, and the hero would silently swap from a park percentage to a
-   *  different number with a different caption on one transient network
-   *  error, with nothing on screen saying why. */
-  parksFailed: boolean;
   visits: Parameters<typeof mayorByCell>[0];
   failed: boolean;
 }
@@ -98,25 +91,26 @@ export default function LeaderboardScreen() {
   useEffect(() => onIdentityChanged(() => setIdentitySignal((v) => v + 1)), []);
 
   const load = useCallback(async (forDistrict: string): Promise<BoardData> => {
-    // In parallel: three independent reads with no ordering between them.
-    const [board, parks, visits] = await Promise.all([
+    // Two independent reads, no ordering between them.
+    //
+    // The park-path read that used to be here is GONE, along with the whole
+    // dependency on a hand-applied migration. It fed a denominator this
+    // board no longer uses (see ConquestEntry.share), and a caption. It also
+    // never returned anything: park_path_cells is empty in production and
+    // all four live districts contain zero park cells.
+    const [board, visits] = await Promise.all([
       // Scoped to this district server-side, like the two reads beside it —
       // see fetchTileLeaderboard's own `district` param for what the
       // unscoped version cost.
       fetchTileLeaderboard(forDistrict),
-      fetchDistrictParkCells(forDistrict),
       fetchDistrictVisits(forDistrict),
     ]);
     return {
       tiles: board.ok ? board.tiles : null,
       meUserId: board.ok ? board.meUserId : null,
-      parkCells: parks.ok ? parks.cells : new Set<string>(),
-      parkRows: parks.ok ? parks.parkCells : [],
-      parksFailed: !parks.ok,
       visits: visits.ok ? visits.visits : [],
-      // Only the ownership read failing is a failed BOARD. Missing park data
-      // is a normal state (most of the planet) and missing visits just means
-      // an empty Local Leaders section.
+      // Only the ownership read failing is a failed BOARD; missing visits
+      // just means an empty Local Leaders section.
       failed: !board.ok,
     };
   }, []);
@@ -159,24 +153,15 @@ export default function LeaderboardScreen() {
     return () => clearTimeout(id);
   }, [isFocused, district, identitySignal, load]);
 
-  // ---- Board 1: conquest, as a share of this district's ground -----------
+  // ---- Board 1: who holds the claimed ground in this district ------------
   //
-  // The denominator is the district's park paths where that data exists, and
-  // the district's OWN cell count where it does not. That fallback is not
-  // belt-and-braces: measured 2026-09-09, `park_path_cells` is EMPTY in
-  // production (the 36,193-row data migration is applied by hand and never
-  // was), so today the park denominator exists for nobody, in any district.
-  //
-  // districtConquest's own header says a leaderboard reading 0% because
-  // nobody ran the SQL is indistinguishable from one reading 0% because
-  // nobody ran. This screen was violating that rule: it fell back to raw
-  // cell counts, so the headline number quietly stopped being a percentage
-  // at all. A share of the district is always defined, everywhere, with no
-  // data — and it upgrades to the park number the moment the migration
-  // lands.
+  // Needs no data beyond the tiles themselves — no park table, no
+  // hand-applied migration, nothing that can be forgotten. See
+  // ConquestEntry.share for why the denominator is claimed ground rather
+  // than the district.
   const conquest = useMemo(() => {
     if (!data?.tiles || district === null) return null;
-    return districtConquest(data.tiles, district, data.parkCells);
+    return districtConquest(data.tiles, district);
   }, [data, district]);
 
   // ---- Board 2: mayorship over ground people keep coming back to ----------
@@ -186,9 +171,13 @@ export default function LeaderboardScreen() {
     [data, district],
   );
 
+  // The arena's caption. From the metro region rather than a majority vote
+  // over park cells — that vote could only ever return null, since the park
+  // table is empty, and it inherited a 21.3% boundary error besides.
+  // Decorative either way: the district id is what scores.
   const label = useMemo(
-    () => (district !== null && data ? districtLabel(district, data.parkRows) : null),
-    [district, data],
+    () => (coords ? (nearestRegion(coords.lat, coords.lng)?.name ?? null) : null),
+    [coords],
   );
 
   // ---- Your own standing, which is the hero ------------------------------
@@ -318,9 +307,9 @@ export default function LeaderboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.textSecondary} />
         }>
         {/* THE ARENA. A caption, not a control — there is nothing to pick.
-            `label` is null wherever no park data exists (most of the planet),
-            and the fallback says "where you are" rather than inventing a
-            place name. See districtLabel's own comment. */}
+            `label` is the metro region, and null before the first fix — the
+            fallback says "where you are" rather than inventing a place
+            name. Decorative: the district id is what scores. */}
         <Animated.View entering={FadeIn.duration(300)} style={styles.arena}>
           <Text style={[styles.arenaKicker, { color: c.textSecondary }]}>
             {t('leaderboard.arenaKicker')}
@@ -338,23 +327,12 @@ export default function LeaderboardScreen() {
             {pct(me?.share ?? 0)}
           </Text>
           <Text style={[styles.heroCaption, { color: c.textSecondary }]}>
-            {/* The caption names the denominator, because the two are not
-                the same claim and the runner has to know which they are
-                looking at. Both are percentages — see ConquestBasis for why
-                there is no longer a raw-count fallback. */}
-            {conquest?.basis === 'parkPaths'
-              ? t('leaderboard.heroParkShare')
-              : t('leaderboard.heroDistrictShare')}
+            {/* Share of the ground anyone holds here — the competitive
+                number. How much of the district is untouched is a different
+                question and is answered under the bar. */}
+            {t('leaderboard.heroClaimedShare')}
           </Text>
           <View style={styles.heroChips}>
-            {/* A failed park read is SAID, not absorbed. Without this it is
-                indistinguishable from a district that simply has no park
-                data: both leave the set empty, and the percentage would
-                quietly change what it means with nothing on screen to
-                explain it. */}
-            {data.parksFailed && (
-              <Chip text={t('leaderboard.parksUnavailable')} c={c} tone={c.accent} />
-            )}
             <Chip
               text={myRank > 0 ? t('leaderboard.rankOf', { rank: myRank, total: conquest?.entries.length ?? 0 }) : t('leaderboard.unranked')}
               c={c}
@@ -379,13 +357,20 @@ export default function LeaderboardScreen() {
             denominator — a bar of nothing is not a picture of anything. */}
         {shareSegments.length > 0 && (
           <Animated.View entering={FadeInDown.duration(340).delay(60)} style={styles.block}>
-            <ShareBar
-              segments={shareSegments}
-              c={c}
-              unclaimedLabel={t('leaderboard.unclaimed', {
-                pct: pct(Math.max(0, 1 - shareSegments.reduce((s, x) => s + x.share, 0))),
+            {/* Segments sum to 1 — every claimed cell has exactly one
+                holder — so there is no remainder to draw. */}
+            <ShareBar segments={shareSegments} c={c} unclaimedLabel={null} />
+            {/* The frontier, as a caption rather than a slice. It is a
+                different question with a different denominator (the whole
+                district, buildings and all), and drawing it in the same bar
+                would squash every runner into an invisible sliver — which is
+                what it did. Small here is the honest answer and the point:
+                it is how much is left to take. */}
+            <Text style={[styles.frontier, { color: c.textSecondary }]}>
+              {t('leaderboard.frontier', {
+                pct: pct((conquest?.claimedTotal ?? 0) / (conquest?.districtTotal || 1)),
               })}
-            />
+            </Text>
           </Animated.View>
         )}
 
@@ -612,6 +597,7 @@ const styles = StyleSheet.create({
   chip: { paddingVertical: 4, paddingHorizontal: Spacing.two, borderRadius: 999 },
   chipText: { fontSize: 12, fontWeight: '700' },
   block: { gap: Spacing.two },
+  frontier: { fontSize: 12, fontWeight: '600' },
   sectionTitle: { fontSize: 13, fontWeight: '800', letterSpacing: 0.8 },
   sectionNote: { fontSize: 13, lineHeight: 18 },
   rows: { gap: Spacing.two, paddingTop: Spacing.one },

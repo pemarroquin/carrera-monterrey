@@ -213,88 +213,69 @@ export interface TileOwnerRow {
 export interface ConquestEntry {
   userId: string;
   displayName: string | null;
-  /** Cells counted toward this runner's share — park-path cells under the
-   *  'parkPaths' basis, all owned cells in the district under 'district'. */
-  countedCells: number;
-  /** Share of the district, 0-1. ALWAYS meaningful — see ConquestBasis. */
+  /**
+   * This runner's share of the CLAIMED ground in the district, 0-1.
+   *
+   * Share of claimed, not share of the district, and that was measured. A
+   * res-7 district holds 16 807 res-12 cells and most of them are buildings,
+   * private land or water — ground nobody can run. Against that denominator
+   * every real runner sits between 0.02% and 2.39% (measured across all four
+   * live districts, 2026-09-09) and no amount of running moves it. That is
+   * precisely the "years or never" denominator park_paths.sql measured and
+   * rejected — 0.262% of a municipio's area for a 5.7 km run — and an
+   * earlier version of this file reproduced it.
+   *
+   * Against claimed ground the same runs read 8.6% to 91.4%: 58.5% against
+   * 41.5% is a contest, 85% against 15% is a rout you can see. That is the
+   * question a leaderboard asks — who holds this place — and it is inherently
+   * relative. It also moves the moment anyone runs, in both directions,
+   * which is what makes it worth defending.
+   */
   share: number;
-  /** Every owned cell in the district, park or not. Kept alongside the share
-   *  because the percentage alone hides a runner who covers streets rather
-   *  than parks. */
+  /** Cells this runner owns in the district. The absolute number, kept
+   *  because a share alone cannot distinguish holding half of a busy
+   *  district from holding half of an empty one. */
   cellsHeld: number;
   flaggedCellsHeld: number;
 }
 
-/**
- * What the percentage is a share OF.
- *
- * 'parkPaths' is the denominator park_paths.sql measured as the only one that
- * moves: one 5.7 km run is 0.262% of San Pedro's area, 0.63% of its street
- * network, and 5.5% of its park paths.
- *
- * 'district' is every res-12 cell in the arena — 16 807 of them, always,
- * anywhere on Earth, with no data at all. It exists because the park
- * denominator DOES NOT EXIST in practice: `park_path_cells` is empty in
- * production (measured 2026-09-09; the 36,193-row data migration is applied
- * by hand and never was), so every real district falls here today.
- *
- * The previous version returned `hasDenominator: false` and let the caller
- * fall back to a raw cell count, which meant the headline number silently
- * stopped being a percentage. That is precisely what this file's own header
- * forbids — "a leaderboard that says 0% because nobody ran the SQL is
- * indistinguishable from one that says 0% because nobody ran". A share of
- * the district is always defined and upgrades to the park share the moment
- * the data lands.
- *
- * It counts ground nobody can run (buildings, private land), which is fine:
- * it is the same denominator for everyone in the district, so the contest is
- * fair, and the numbers move — 402 cells is 2.4%.
- */
-export type ConquestBasis = 'parkPaths' | 'district';
-
 export interface DistrictConquest {
   entries: ConquestEntry[];
-  /** The denominator actually used. */
-  cellTotal: number;
-  basis: ConquestBasis;
+  /** Cells owned by anyone in this district — the shares' denominator. */
+  claimedTotal: number;
+  /** Every res-12 cell in the arena: 16 807, always, anywhere on Earth, with
+   *  no data at all. Not a share denominator (see ConquestEntry.share) — it
+   *  is what the FRONTIER is measured against: how much of this district has
+   *  been claimed by anyone yet. Small is the honest answer there, and the
+   *  point: it is how much is left to take. */
+  districtTotal: number;
 }
 
 /**
- * Board 1 for one district.
+ * Board 1 for one district — who holds the claimed ground.
  *
- * `parkCells` is the district's park-path cell set (see fetchDistrictParkCells)
- * — passed in rather than fetched so this stays pure and testable. Empty is a
- * valid input and selects the 'district' basis.
- *
- * Ties broken by user id for a stable order between loads, same reasoning as
- * rankByTileCount.
+ * Pure, over rows already fetched. Ties broken by user id for a stable order
+ * between loads, same reasoning as the rest of this file.
  */
-export function districtConquest(
-  tiles: TileOwnerRow[],
-  district: string,
-  parkCells: Set<string>,
-): DistrictConquest {
-  const basis: ConquestBasis = parkCells.size > 0 ? 'parkPaths' : 'district';
-  const cellTotal = basis === 'parkPaths' ? parkCells.size : cellToChildrenSize(district, DEFAULT_TILE_RES);
-
+export function districtConquest(tiles: TileOwnerRow[], district: string): DistrictConquest {
   const byUser = new Map<
     string,
-    { displayName: string | null; countedCells: number; cellsHeld: number; flaggedCellsHeld: number }
+    { displayName: string | null; cellsHeld: number; flaggedCellsHeld: number }
   >();
 
+  let claimedTotal = 0;
   for (const tile of tiles) {
     // districtOfCell also rejects any cell not at the tile resolution, so an
-    // unconverted res-11 tile is excluded here rather than being counted
-    // into a district it would inflate.
+    // unconverted res-11 tile is excluded rather than inflating a district.
     if (districtOfCell(tile.h3) !== district) continue;
+    claimedTotal++;
     let entry = byUser.get(tile.ownerId);
     if (!entry) {
-      entry = { displayName: tile.displayName, countedCells: 0, cellsHeld: 0, flaggedCellsHeld: 0 };
+      entry = { displayName: tile.displayName, cellsHeld: 0, flaggedCellsHeld: 0 };
       byUser.set(tile.ownerId, entry);
     }
     entry.cellsHeld++;
     if (tile.flagged) entry.flaggedCellsHeld++;
-    if (basis === 'district' || parkCells.has(tile.h3)) entry.countedCells++;
     if (entry.displayName === null && tile.displayName !== null) {
       entry.displayName = tile.displayName;
     }
@@ -304,20 +285,17 @@ export function districtConquest(
     .map(([userId, agg]) => ({
       userId,
       displayName: agg.displayName,
-      countedCells: agg.countedCells,
-      // cellTotal cannot be 0: cellToChildrenSize is 16 807 for any res-7
-      // cell, and the parkPaths branch is only taken when the set is
-      // non-empty. So no NaN or Infinity can reach the UI.
-      share: agg.countedCells / cellTotal,
+      // claimedTotal is 0 only when byUser is empty, so this never divides by
+      // zero — but it is written defensively anyway, because a NaN reaching
+      // the UI would render as "NaN%" rather than fail.
+      share: claimedTotal > 0 ? agg.cellsHeld / claimedTotal : 0,
       cellsHeld: agg.cellsHeld,
       flaggedCellsHeld: agg.flaggedCellsHeld,
     }))
-    // Ranked by the number actually shown, so the ordering always matches it.
     .sort(
       (a, b) =>
-        b.countedCells - a.countedCells ||
-        (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
+        b.cellsHeld - a.cellsHeld || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
     );
 
-  return { entries, cellTotal, basis };
+  return { entries, claimedTotal, districtTotal: cellToChildrenSize(district, DEFAULT_TILE_RES) };
 }

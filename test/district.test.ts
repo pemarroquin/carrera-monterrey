@@ -21,7 +21,6 @@ import { describe, expect, it } from 'vitest';
 import {
   DISTRICT_RES,
   districtCellPattern,
-  districtLabel,
   districtOf,
   districtOfCell,
   isInDistrict,
@@ -143,48 +142,6 @@ describe('districtOfCell', () => {
     const oldCell = latLngToCell(MTY.lat, MTY.lng, 11);
     expect(districtOfCell(oldCell)).toBeNull();
     expect(isInDistrict(oldCell, districtOf(MTY))).toBe(false);
-  });
-});
-
-describe('districtLabel', () => {
-  const district = districtOf(MTY);
-  const inside = (n: number) => latLngToCell(MTY.lat + n * 0.0004, MTY.lng, DEFAULT_TILE_RES);
-
-  it('labels a district by majority vote over its park cells', () => {
-    const label = districtLabel(district, [
-      { h3: inside(0), municipio: 'Monterrey' },
-      { h3: inside(1), municipio: 'Monterrey' },
-      { h3: inside(2), municipio: 'San Pedro Garza García' },
-    ]);
-    expect(label).toBe('Monterrey');
-  });
-
-  it('ignores park cells outside the district', () => {
-    const label = districtLabel(district, [
-      { h3: inside(0), municipio: 'Monterrey' },
-      // 20 km away, so a different district entirely — must not vote here.
-      { h3: latLngToCell(MTY.lat, MTY.lng + 0.2, DEFAULT_TILE_RES), municipio: 'Elsewhere' },
-      { h3: latLngToCell(MTY.lat, MTY.lng + 0.2004, DEFAULT_TILE_RES), municipio: 'Elsewhere' },
-      { h3: latLngToCell(MTY.lat, MTY.lng + 0.2008, DEFAULT_TILE_RES), municipio: 'Elsewhere' },
-    ]);
-    expect(label).toBe('Monterrey');
-  });
-
-  it('is STABLE on a tie regardless of row order', () => {
-    // A 50/50 district must not flip its caption between two fetches. The
-    // rows arrive in whatever order PostgREST returns them.
-    const rows = [
-      { h3: inside(0), municipio: 'Zeta' },
-      { h3: inside(1), municipio: 'Alpha' },
-    ];
-    expect(districtLabel(district, rows)).toBe('Alpha');
-    expect(districtLabel(district, [...rows].reverse())).toBe('Alpha');
-  });
-
-  it('returns null where there is no park data — most of the planet', () => {
-    // Callers must draw the map instead of inventing a name. Only seven
-    // Nuevo León municipios are extracted.
-    expect(districtLabel(district, [])).toBeNull();
   });
 });
 

@@ -1,72 +1,28 @@
-// Fetches for the two leaderboards, scoped to one district.
+// The leaderboard's district-scoped read.
 //
-// Both filter SERVER-SIDE by the district's H3 prefix (districtCellPattern)
-// rather than pulling a table down and truncating every id on device. That
-// matters more than it looks: park_path_cells holds 36,193 rows today and
-// PostgREST caps a response at 1000, so an unfiltered read would be 37
-// round trips to answer a question about one 5 km² patch — and this repo has
-// already shipped a leaderboard that silently ranked a truncated 1000-row
-// sample (see fetchTileLeaderboard's own paging comment).
+// Filters SERVER-SIDE by the district's H3 prefix (districtCellPattern)
+// rather than pulling a table down and truncating every id on device — this
+// repo has already shipped a leaderboard that silently ranked a truncated
+// 1000-row sample (see fetchTileLeaderboard's own paging comment).
 //
-// NEITHER NEEDS A MIGRATION, which is the point. `tile_visits` already has a
-// `read all` policy, opened when the table was created for exactly this
-// ("other runners' tile_visits eventually for the Layer 2 rolling board"),
-// and `park_path_cells` is public reference data. Migrations here are applied
-// BY HAND and an unapplied one reads as an honest zero, so a board that needs
-// no SQL cannot be broken by forgetting to run any.
+// NEEDS NO MIGRATION, which is the point. `tile_visits` already has a `read
+// all` policy, opened when the table was created for exactly this ("other
+// runners' tile_visits eventually for the Layer 2 rolling board"). Migrations
+// here are applied BY HAND and an unapplied one reads as an honest zero, so
+// a board that needs no SQL cannot be broken by forgetting to run any.
+//
+// A park-path read lived here too and is DELETED. It fed a denominator this
+// board no longer uses (see ConquestEntry.share) and a caption now taken from
+// the metro region — and it never returned anything anyway: park_path_cells
+// is empty in production and all four live districts contain zero park cells.
 import { districtCellPattern } from '@/lib/district';
 import type { TileVisitRow } from '@/lib/mayorship';
 import { supabase } from '@/lib/supabase';
 import { withSession, type Outcome } from '@/lib/territory-sync';
 
-/** One park-path cell, with the municipio it was attributed to. The
- *  municipio is for districtLabel's decorative caption only — see its own
- *  comment for why nothing scores by it. */
-export interface ParkCell {
-  h3: string;
-  municipio: string;
-}
-
 /** PostgREST's hard page size. Paged rather than assumed — see this file's
  *  header for what happened the last time a read here assumed. */
 const PAGE = 1000;
-
-/**
- * The district's park-path cells: Board 1's denominator.
- *
- * A Set, because the only question asked of it is membership — see
- * districtConquest. Empty is a VALID answer and means "no park data here",
- * which is most of the planet (seven Nuevo León municipios are extracted);
- * the caller must render cells held rather than 0%.
- *
- * `municipio` comes back too, for districtLabel's decorative caption only.
- */
-export async function fetchDistrictParkCells(
-  district: string,
-): Promise<Outcome<{ cells: Set<string>; parkCells: ParkCell[] }>> {
-  return withSession<{ cells: Set<string>; parkCells: ParkCell[] }>(async () => {
-    const pattern = `${districtCellPattern(district)}%`;
-    const parkCells: ParkCell[] = [];
-    for (let offset = 0; ; offset += PAGE) {
-      const { data, error } = await supabase
-        .from('park_path_cells')
-        .select('h3, municipio')
-        .like('h3', pattern)
-        // Ordered so paging is deterministic. Without it Postgres may return
-        // rows in a different order per page and offset paging can skip one —
-        // the same trap fetchTileLeaderboard documents. (municipio, h3) is
-        // the primary key, so h3 alone is unique within a municipio and the
-        // pair is a total order.
-        .order('municipio', { ascending: true })
-        .order('h3', { ascending: true })
-        .range(offset, offset + PAGE - 1);
-      if (error || !data) return { ok: false, reason: 'network' as const };
-      parkCells.push(...data);
-      if (data.length < PAGE) break;
-    }
-    return { ok: true, cells: new Set(parkCells.map((c) => c.h3)), parkCells };
-  });
-}
 
 /**
  * The district's visits: Board 2's raw material.

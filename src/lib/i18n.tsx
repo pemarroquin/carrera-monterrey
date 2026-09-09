@@ -258,9 +258,7 @@ const translations = {
       // Dos frases, no una: 0/0 no es 0%. Un distrito sin datos de parques
       // no puede decirle a alguien que acaba de cubrir su colonia que no
       // tiene nada.
-      heroParkShare: 'de los caminos de parque de este distrito son tuyos',
-      heroDistrictShare: 'de este distrito es tuyo',
-      parksUnavailable: 'Sin datos de parques',
+      heroClaimedShare: 'del terreno tomado en este distrito es tuyo',
       rankOf: 'Lugar %{rank} de %{total}',
       unranked: 'Sin territorio aquí',
       // El número que une las dos tablas: la tienes, pero alguien viene más
@@ -269,7 +267,7 @@ const translations = {
         one: '1 casilla en disputa',
         other: '%{count} casillas en disputa',
       } as PluralForm,
-      unclaimed: 'Libre %{pct}',
+      frontier: '%{pct} de este distrito ya está tomado. El resto está libre.',
       // Tabla 1. Cada sección dice qué mide — así las dos caben en una sola
       // pantalla sin que dos números que no se comparan parezcan un ranking.
       conquestTitle: 'CONQUISTA · AHORA MISMO',
@@ -766,16 +764,14 @@ const translations = {
       locating: 'Finding your location…',
       locationUnavailable: 'This device cannot give us a location.',
       enableLocation: 'Allow location',
-      heroParkShare: "of this district's park paths are yours",
-      heroDistrictShare: 'of this district is yours',
-      parksUnavailable: 'Park data unavailable',
+      heroClaimedShare: 'of the claimed ground in this district is yours',
       rankOf: '%{rank} of %{total}',
       unranked: 'No ground here yet',
       contested: {
         one: '1 cell contested',
         other: '%{count} cells contested',
       } as PluralForm,
-      unclaimed: 'Unclaimed %{pct}',
+      frontier: '%{pct} of this district has been claimed. The rest is open.',
       conquestTitle: 'CONQUEST · RIGHT NOW',
       conquestNote:
         'Ground each runner holds at this moment. Anyone can take it by running there.',

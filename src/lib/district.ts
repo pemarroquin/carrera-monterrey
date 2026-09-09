@@ -109,47 +109,12 @@ export function isInDistrict(h3: string, district: string): boolean {
   return districtOfCell(h3) === district;
 }
 
-/**
- * A human label for a district, by majority vote over the park-path cells
- * inside it — "San Pedro Garza García" rather than `872d8a2b1ffffff`.
- *
- * DECORATIVE, and that is not a hedge — it is what makes the majority vote
- * acceptable. The measurement in this file's header (21.3% of res-7 parents
- * straddle two municipios) is exactly the error this vote inherits, so a
- * district on a municipal boundary WILL sometimes be labelled with the
- * neighbour's name. That is survivable for a caption and would not be for a
- * score, which is why nothing ranks, filters, scores or claims by this
- * value: the district id does all of that.
- *
- * Returns null when no park cells fall inside — most of the planet. Callers
- * must render the map instead of inventing a name; the shape on screen is
- * the identity, which is the same reason this product stopped asking runners
- * to name their loops.
- */
-export function districtLabel(
-  district: string,
-  parkCells: { h3: string; municipio: string }[],
-): string | null {
-  const votes = new Map<string, number>();
-  for (const cell of parkCells) {
-    if (districtOfCell(cell.h3) !== district) continue;
-    votes.set(cell.municipio, (votes.get(cell.municipio) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  let bestCount = 0;
-  for (const [municipio, count] of votes) {
-    // Strictly greater, plus a name tie-break, so the label is STABLE across
-    // loads. A Map's iteration order follows insertion, which follows
-    // whatever order the rows arrived in — without the tie-break an exact
-    // 50/50 district would flip its caption between two fetches for no
-    // visible reason.
-    if (count > bestCount || (count === bestCount && best !== null && municipio < best)) {
-      best = municipio;
-      bestCount = count;
-    }
-  }
-  return best;
-}
+// districtLabel lived here and is DELETED. It voted on a district's name by
+// majority over the park-path cells inside it, which could only ever return
+// null — park_path_cells is empty in production — and inherited the 21.3%
+// boundary error measured in this file's header besides. The leaderboard's
+// caption now comes from regions.ts's nearestRegion, which is always
+// available and just as decorative.
 
 /**
  * A `LIKE` prefix that matches exactly the tile-resolution cells inside one
