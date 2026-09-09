@@ -12,6 +12,7 @@ import { districtOf, districtOfCell } from '../src/lib/district';
 import {
   MAYORSHIP_WINDOW_DAYS,
   cellsHeldBy,
+  contestedCells,
   mayorByCell,
   rankMayors,
   type TileVisitRow,
@@ -231,5 +232,35 @@ describe('cellsHeldBy', () => {
     expect(cellsHeldBy(mayors, 'daniel')).toEqual([CELL_A]);
     expect(cellsHeldBy(mayors, 'laura')).toEqual([CELL_B]);
     expect(cellsHeldBy(mayors, 'nobody')).toEqual([]);
+  });
+});
+
+describe('contestedCells', () => {
+  const mayors = () =>
+    mayorByCell(
+      [
+        // laura is mayor of CELL_A (two days vs daniel's one)
+        visit(CELL_A, 'laura', 1),
+        visit(CELL_A, 'laura', 2),
+        visit(CELL_A, 'daniel', 1),
+        // daniel is mayor of CELL_B
+        visit(CELL_B, 'daniel', 1),
+      ],
+      NOW,
+    );
+
+  it('flags ground you own that someone else runs more', () => {
+    expect(contestedCells([CELL_A, CELL_B], mayors(), 'daniel')).toEqual([CELL_A]);
+  });
+
+  it('does not flag ground you are mayor of', () => {
+    expect(contestedCells([CELL_B], mayors(), 'daniel')).toEqual([]);
+  });
+
+  it('does not flag ground with no mayor — nobody to lose it to', () => {
+    // A cell nobody has run inside the window. Owning it is not "contested",
+    // it is simply quiet.
+    const quiet = latLngToCell(MTY.lat + 0.01, MTY.lng, 12);
+    expect(contestedCells([quiet], mayors(), 'daniel')).toEqual([]);
   });
 });

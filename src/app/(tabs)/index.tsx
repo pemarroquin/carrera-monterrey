@@ -23,7 +23,6 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FenceMap } from '@/components/fence-map';
-import { AreaPrompt } from '@/components/area-prompt';
 import { NamePrompt } from '@/components/name-prompt';
 import { TrackMap } from '@/components/track-map';
 import { Icon } from '@/components/ui/icon';
@@ -806,9 +805,6 @@ export default function TrackScreen() {
               no run to attach an area to until then.
               Cells are crossed AND surrounded: the area is the whole shape
               the runner drew, not just its perimeter. */}
-          {saveState === 'saved' && sessionEnclosed.length > 0 && (
-            <AreaPrompt cells={[...sessionTiles, ...sessionEnclosed]} regionId={runRegionId} />
-          )}
 
           {/* Tile Coverage brief §6 step 5 — replaces the old "You took X m²
               from N runner(s)" spoils banner (still computed above, no

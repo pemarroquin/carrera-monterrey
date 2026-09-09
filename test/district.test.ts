@@ -7,16 +7,20 @@
 // fails loudly instead of quietly changing what every score means.
 import {
   UNITS,
+  cellToCenterChild,
+  cellToChildren,
   cellToLatLng,
   cellToParent,
   getHexagonAreaAvg,
   getResolution,
+  gridDisk,
   latLngToCell,
 } from 'h3-js';
 import { describe, expect, it } from 'vitest';
 
 import {
   DISTRICT_RES,
+  districtCellPattern,
   districtLabel,
   districtOf,
   districtOfCell,
@@ -25,6 +29,19 @@ import {
 import { DEFAULT_TILE_RES } from '../src/lib/tiles';
 
 const MTY = { lat: 25.6866, lng: -100.3161 };
+
+/** Spread across base cells, hemispheres and latitudes — H3 index layout
+ *  varies by base cell, and pentagon-adjacent maths differs near the poles. */
+const WORLDWIDE = [
+  MTY,
+  { lat: 19.4326, lng: -99.1332 }, // CDMX
+  { lat: 21.1619, lng: -86.8515 }, // Cancún
+  { lat: 32.5149, lng: -117.0382 }, // Tijuana
+  { lat: -33.8688, lng: 151.2093 }, // Sydney
+  { lat: 64.1466, lng: -21.9426 }, // Reykjavík
+  { lat: 0.3476, lng: 32.5825 }, // Kampala
+  { lat: -54.8019, lng: -68.303 }, // Ushuaia
+];
 
 describe('DISTRICT_RES', () => {
   it('is res 7 — ~5.2 km2, about 2.8 km across', () => {
@@ -61,6 +78,23 @@ describe('districtOf', () => {
     // districts, so there is no boundary case to resolve and no majority
     // vote in the scoring path.
     expect(districtOf(MTY)).toBe(districtOf({ ...MTY }));
+  });
+
+  it('AGREES with truncating the position\'s own tile, worldwide', () => {
+    // The bug this pins down: H3's hierarchy is index truncation, not
+    // geometry, so latLngToCell(p, 7) and cellToParent(latLngToCell(p, 12), 7)
+    // differ near a cell boundary. If districtOf used the direct call, a
+    // runner would be shown a district their own tiles truncate out of —
+    // their ground missing from the board they are looking at, and the
+    // server-side LIKE prefix matching none of it.
+    //
+    // Monterrey agrees either way, which is exactly why this is asserted
+    // across base cells: the bug would have shipped and then surfaced only
+    // for runners in other cities.
+    for (const place of WORLDWIDE) {
+      const own = latLngToCell(place.lat, place.lng, DEFAULT_TILE_RES);
+      expect(districtOf(place)).toBe(districtOfCell(own));
+    }
   });
 
   it('puts a nearby position in the same district and a distant one elsewhere', () => {
@@ -151,5 +185,36 @@ describe('districtLabel', () => {
     // Callers must draw the map instead of inventing a name. Only seven
     // Nuevo León municipios are extracted.
     expect(districtLabel(district, [])).toBeNull();
+  });
+});
+
+describe('districtCellPattern', () => {
+  it('matches every tile-resolution cell in the district and nothing outside it', () => {
+    const district = districtOf(MTY);
+    const pattern = districtCellPattern(district);
+    // Every child shares it...
+    for (const child of cellToChildren(district, DEFAULT_TILE_RES)) {
+      expect(child.startsWith(pattern)).toBe(true);
+    }
+    // ...and no neighbouring district's cells do. This is what makes the
+    // server-side filter exact rather than approximate.
+    for (const neighbour of gridDisk(district, 1).filter((c) => c !== district)) {
+      expect(cellToCenterChild(neighbour, DEFAULT_TILE_RES).startsWith(pattern)).toBe(false);
+    }
+  });
+
+  it('is 2 + DISTRICT_RES characters — the two nibbles plus one per digit', () => {
+    expect(districtCellPattern(districtOf(MTY))).toHaveLength(2 + DISTRICT_RES);
+  });
+
+  it('holds across base cells worldwide, including polar and southern', () => {
+    // A prefix that silently matched nothing would read as "this district is
+    // empty", not as an error — the same failure mode tiles.ts guards for.
+    for (const place of WORLDWIDE) {
+      const district = districtOf(place);
+      const pattern = districtCellPattern(district);
+      expect(pattern).toHaveLength(2 + DISTRICT_RES);
+      expect(latLngToCell(place.lat, place.lng, DEFAULT_TILE_RES).startsWith(pattern)).toBe(true);
+    }
   });
 });

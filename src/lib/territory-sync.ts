@@ -21,7 +21,7 @@ import type { TrackPoint } from '@/lib/tracking';
  *  an extra, caller-specific failure reason on top of the three every call
  *  site shares (`deleteRun` uses it for `'denied'`) — defaults to `never` so
  *  every other caller's type is unaffected. */
-type Outcome<T, R extends string = never> =
+export type Outcome<T, R extends string = never> =
   | ({ ok: true } & T)
   | { ok: false; reason: 'disabled' | 'auth' | 'network' | R };
 

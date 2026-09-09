@@ -225,3 +225,30 @@ export function cellsHeldBy(
   for (const [h3, mayor] of mayors) if (mayor.userId === userId) held.push(h3);
   return held;
 }
+
+/**
+ * Ground you hold but somebody else runs more often — your territory at
+ * RISK.
+ *
+ * This is the one number that ties the two boards together, and it is the
+ * reason they belong on one screen rather than behind a toggle. Board 1 says
+ * you own a cell (you ran it most recently). Board 2 says someone else is
+ * there far more. Both are true at once, and together they say something
+ * neither says alone: you are about to lose this.
+ *
+ * Cells with no mayor are NOT contested — nobody has been there inside the
+ * window, so there is no one to lose them to. Cells you are mayor of are
+ * likewise safe by definition.
+ */
+export function contestedCells(
+  ownedCells: string[],
+  mayors: Map<string, { userId: string; days: number }>,
+  userId: string,
+): string[] {
+  const atRisk: string[] = [];
+  for (const h3 of ownedCells) {
+    const mayor = mayors.get(h3);
+    if (mayor && mayor.userId !== userId) atRisk.push(h3);
+  }
+  return atRisk;
+}

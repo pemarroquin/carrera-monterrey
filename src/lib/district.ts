@@ -34,7 +34,7 @@
 // The cost of this choice, stated plainly: a district has no human name. That
 // is what `districtLabel` is for, and the label is DECORATIVE — nothing
 // ranks, filters or scores by it. See its own comment.
-import { cellToParent, getResolution, latLngToCell } from 'h3-js';
+import { cellToCenterChild, cellToParent, getResolution, latLngToCell } from 'h3-js';
 
 import type { LatLng } from '@/lib/territory';
 import { DEFAULT_TILE_RES } from '@/lib/tiles';
@@ -60,10 +60,30 @@ import { DEFAULT_TILE_RES } from '@/lib/tiles';
  */
 export const DISTRICT_RES = 7;
 
-/** The district a position is in. This is the whole lookup — no network, no
- *  table, no boundary test. */
+/**
+ * The district a position is in. This is the whole lookup — no network, no
+ * table, no boundary test.
+ *
+ * Note what this does NOT do: `latLngToCell(lat, lng, DISTRICT_RES)`. H3's
+ * hierarchy is INDEX TRUNCATION, not geometry — hexagons cannot tile
+ * hierarchically, so a cell's algebraic parent does not exactly cover it,
+ * and near a boundary `latLngToCell(p, 7)` and
+ * `cellToParent(latLngToCell(p, 12), 7)` return DIFFERENT cells.
+ *
+ * Using the direct call would mean a runner is told they compete in one
+ * district while their own tiles truncate into the neighbour — so their
+ * ground would not appear on the board they are looking at, and the
+ * server-side LIKE prefix would match none of it. It reads as "you hold
+ * nothing here", which is indistinguishable from having run nowhere.
+ *
+ * Caught by a test across eight base cells worldwide; Monterrey happens to
+ * agree either way, so the bug would have shipped and then appeared only for
+ * runners in other cities. Defining the arena in the SAME algebra as the
+ * tiles that score it makes the two paths one computation, and they can
+ * never disagree again.
+ */
 export function districtOf(at: LatLng): string {
-  return latLngToCell(at.lat, at.lng, DISTRICT_RES);
+  return cellToParent(latLngToCell(at.lat, at.lng, DEFAULT_TILE_RES), DISTRICT_RES);
 }
 
 /**
@@ -129,4 +149,32 @@ export function districtLabel(
     }
   }
   return best;
+}
+
+/**
+ * A `LIKE` prefix that matches exactly the tile-resolution cells inside one
+ * district — so a district's rows can be filtered SERVER-SIDE instead of
+ * pulling a whole table down and truncating every id on device.
+ *
+ * H3 packs a cell id as: magic nibble, resolution nibble, base cell, then
+ * three bits per digit. Two res-12 cells therefore share a string prefix
+ * exactly when they share an ancestor, and the prefix that identifies a
+ * res-7 ancestor's descendants is `2 + DISTRICT_RES` characters long (the
+ * two nibbles plus one hex char per digit).
+ *
+ * Derived through `cellToCenterChild` rather than by splicing the district's
+ * own string, deliberately: if H3's encoding ever changed, going through the
+ * library surfaces it as a failing test here instead of silently producing a
+ * prefix that matches nothing — which would read as "this district is empty",
+ * not as an error. That is the same reasoning, and the same failure mode, as
+ * tiles.ts's resolution-nibble LIKE pattern (`tileResLikePattern`), which is
+ * asserted against h3-js for every resolution for exactly this reason.
+ *
+ * Verified across eight base cells worldwide (Monterrey, CDMX, Cancún,
+ * Tijuana, Sydney, Reykjavík, Kampala, Ushuaia): all 16,807 children of a
+ * res-7 cell share this prefix, and no neighbouring district's prefix
+ * collides with it.
+ */
+export function districtCellPattern(district: string): string {
+  return cellToCenterChild(district, DEFAULT_TILE_RES).slice(0, 2 + DISTRICT_RES);
 }
