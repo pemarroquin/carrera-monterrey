@@ -16,6 +16,8 @@ import { cellsToMultiPolygon } from 'h3-js';
 import type { MultiPolygon } from 'geojson';
 
 import { SettingsPage, settingsStyles, useSettingsColors } from '@/components/settings-ui';
+import { noiseHoles } from '@/lib/enclosure';
+import { DEFAULT_TILE_RES } from '@/lib/tiles';
 import { TerritoriesMap, type TerritoryFeature } from '@/components/territories-map';
 import { useI18n } from '@/lib/i18n';
 import { fetchMyVisitedCells } from '@/lib/territory-sync';
@@ -69,6 +71,23 @@ export default function HistoryScreen() {
     );
   }
 
+  // Sampling holes are filled before anything is drawn, and the SAME rule
+  // the claim path uses (enclosure.ts's measured cap) so this map and the
+  // territory it depicts can never disagree about a cell.
+  //
+  // Why it is needed here at all, when uploadRun already fills them: that
+  // only ever ran for uploads made after it shipped. Every hole already in a
+  // runner's history predates it, and a screen that still showed those black
+  // hexagons would look exactly as broken as the screenshot that started
+  // this. Filling at render costs nothing (the cells are already in memory)
+  // and makes the fix retroactive without a backfill migration.
+  //
+  // Only holes at or under the cap. The big ones — up to 12 hectares in the
+  // real 2026-09-09 measurement — stay black, because a runner really did go
+  // around those and this map's whole job is to be true about where they
+  // have been.
+  const drawn = [...state.cells, ...noiseHoles(state.cells, DEFAULT_TILE_RES)];
+
   // ONE dissolved shape, not one polygon per cell. cellsToMultiPolygon is the
   // same call enclosure.ts and the live maps use, so every surface in the app
   // draws claimed ground the same way — and a history spanning years is far
@@ -81,7 +100,7 @@ export default function HistoryScreen() {
   // for one feature.
   const geometry: MultiPolygon = {
     type: 'MultiPolygon',
-    coordinates: cellsToMultiPolygon(state.cells, true),
+    coordinates: cellsToMultiPolygon(drawn, true),
   };
   const features: TerritoryFeature[] = [
     { id: 'history', kind: 'saved', geometry, route: null, startedAtMs: 0 },
@@ -90,7 +109,10 @@ export default function HistoryScreen() {
   return (
     <SettingsPage>
       <Text style={[settingsStyles.hint, { color: c.textSecondary }]}>
-        {t('settings.historyHint', { count: state.cells.length })}
+        {/* Counts what is DRAWN, not the raw visit rows. A map with its
+            sampling holes filled and a number that still excluded them would
+            disagree with itself on the same screen. */}
+        {t('settings.historyHint', { count: drawn.length })}
       </Text>
       <View style={styles.map}>
         {/* No onSelect target here — a cell is not a run, and there is

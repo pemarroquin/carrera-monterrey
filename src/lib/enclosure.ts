@@ -105,3 +105,88 @@ export function dropCellsInsideZone(cells: string[], home: LatLng | null, cutM: 
     return haversineM(home, { lat, lng }) > cutM;
   });
 }
+
+/**
+ * The largest hole, in cells, that counts as a GAP IN SAMPLING rather than
+ * as ground the runner went around.
+ *
+ * MEASURED, not chosen. `npm run measure-holes` read every runner's real
+ * coverage on 2026-09-09 and the distribution is cleanly bimodal:
+ *
+ *     29 holes of 1 cell   ( 20 m wide,     362 m²)
+ *      9 holes of 2 cells  ( 41 m wide,     724 m²)
+ *      1 hole  of 3 cells  ( 56 m wide,   1 085 m²)
+ *     ---------------------------------------------- nothing at all here
+ *        holes of 9, 10, 11, 20, 32, 33, 93, 124, 317, 342 cells
+ *                          (110-1 125 m wide, up to 123 734 m²)
+ *
+ * Nothing exists between 3 cells and 9 cells, so a cap of 4, 5 or 6 gives an
+ * IDENTICAL result — 39 holes filled, 50 cells. 6 sits in the middle of that
+ * empty band with roughly 3x margin before it could start absorbing real
+ * ground.
+ *
+ * The upper cluster is not noise and must never be filled: the two largest
+ * are 11-12 HECTARES, 648 m and 1 125 m across. Those are city-block
+ * interiors and gated land somebody ran around, and claiming them is exactly
+ * the "invent territory" failure this whole file was written to avoid (see
+ * the header, and gap-policy.ts's bridge caps for the same shape of rule
+ * applied to time and distance).
+ *
+ * Why a cell COUNT and not an area or a width: the count is what the fill
+ * actually operates on, so a cap expressed in cells cannot drift from what
+ * it gates. The metre figures above are reported by measure-holes for
+ * judging the number, not for computing it.
+ *
+ * Re-run `npm run measure-holes` before changing this. The gap in the
+ * distribution is the argument; a different city with different block sizes
+ * could put the boundary somewhere else.
+ */
+export const MAX_NOISE_HOLE_CELLS = 6;
+
+/**
+ * Cells enclosed by `cells` that are small enough to be sampling noise.
+ *
+ * The difference from `enclosedCells` is the CAP, and it is why both exist:
+ * enclosedCells answers "what did this run surround", which is a claim about
+ * one session's loop and is allowed to be large. This answers "where did the
+ * fix simply miss", which is only ever defensible at small sizes.
+ *
+ * The case that motivated it: a runner's history had black hexagons inside
+ * a band they had run dozens of times (reported with a screenshot,
+ * 2026-09-09). Those cells were in no run's own enclosure, because enclosure
+ * is computed PER RUN while the hole was formed by the UNION of many runs
+ * over months — so nothing had ever claimed them, on any surface. They are
+ * 20-56 m across against consumer GPS accuracy of 5-10 m: the runner did run
+ * there, the fix just never landed inside the cell.
+ *
+ * Each hole is judged WHOLE, never partially filled. Taking the first six
+ * cells of a 342-cell hole would claim an arbitrary sliver of a city block
+ * and leave a ragged edge — worse than leaving it alone, and impossible to
+ * explain to the person looking at it.
+ *
+ * Same walls rule as enclosedCells: only the runner's OWN cells bound a
+ * hole, so a rival's territory can never serve as one side of it.
+ */
+export function noiseHoles(
+  cells: string[],
+  res: number,
+  maxCells: number = MAX_NOISE_HOLE_CELLS,
+): string[] {
+  if (cells.length < 3) return [];
+
+  const owned = new Set(cells);
+  const filled: string[] = [];
+
+  for (const polygon of cellsToMultiPolygon(cells, true)) {
+    // Ring 0 is the outer boundary; every ring after it is a hole.
+    for (let ring = 1; ring < polygon.length; ring++) {
+      // Each hole is collected separately — enclosedCells unions them all
+      // into one set, which is exactly what this cannot do: the SIZE of the
+      // individual hole is what decides whether it may be filled.
+      const hole = polygonToCells([polygon[ring]], res, true).filter((c) => !owned.has(c));
+      if (hole.length > 0 && hole.length <= maxCells) filled.push(...hole);
+    }
+  }
+
+  return filled;
+}
