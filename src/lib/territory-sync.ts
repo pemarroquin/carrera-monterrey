@@ -13,8 +13,7 @@ import { isReservedNickname } from '@/lib/nickname';
 import { setCachedDisplayName } from '@/lib/profile-cache';
 import { nearestRegion } from '@/lib/regions';
 import type { FenceResult, LatLng } from '@/lib/territory';
-import { noiseHoles } from '@/lib/enclosure';
-import { DEFAULT_TILE_RES, isCurrentTileRes, pathToTiles, tileResLikePattern } from '@/lib/tiles';
+import { isCurrentTileRes, pathToTiles, tileResLikePattern } from '@/lib/tiles';
 import type { TrackPoint } from '@/lib/tracking';
 
 /** Every outcome type below is this same shape with a different `ok: true`
@@ -372,34 +371,18 @@ export async function uploadRun(run: RunUpload): Promise<SyncOutcome> {
     // Enclosure comes in already computed and already zone-filtered — see
     // RunUpload.enclosedCells for why it cannot be derived here.
     //
-    // Noise holes are the OTHER kind of enclosed ground, and they cannot be
-    // computed there. Enclosure is per-run; these holes form in the UNION of
-    // many runs over months — a band down one avenue, run dozens of times,
-    // with single cells in the middle no fix ever landed in. Nothing had
-    // ever claimed them, on any surface (reported with a screenshot,
-    // 2026-09-09). So the union is assembled HERE, where the network already
-    // is, and only holes at or under MAX_NOISE_HOLE_CELLS are added — that
-    // cap is measured, not chosen; see enclosure.ts.
-    //
-    // Best-effort by design: if the prior-cells read fails, the run claims
-    // exactly what it would have claimed before. The hole stays unfilled
-    // until the next upload, which is a visible nothing rather than a wrong
-    // claim — and it is never reported as success, since `noiseFilled` is
-    // simply empty.
-    let noiseFilled: string[] = [];
-    const prior = await fetchMyVisitedCells();
-    if (prior.ok) {
-      const union = [...new Set([...prior.cells, ...cells, ...(run.enclosedCells ?? [])])];
-      const owned = new Set(union);
-      // Only cells nobody has recorded yet: a hole filled by an earlier
-      // upload must not be resubmitted on every run forever.
-      noiseFilled = noiseHoles(union, DEFAULT_TILE_RES).filter((c) => !owned.has(c));
-    }
-
-    const claim = await claimTiles(data.id, cells, region, [
-      ...(run.enclosedCells ?? []),
-      ...noiseFilled,
-    ]);
+    // Sampling holes are NOT filled here, and that was measured rather than
+    // assumed. A first pass added them at claim time on the theory that the
+    // union of many runs leaves holes no single run enclosed. It does — in
+    // `tile_visits`. It does NOT in territory: measured 2026-09-09, the
+    // heaviest runner had 38 holes across 919 visited cells and ZERO across
+    // 1 057 owned ones. Per-run enclosure already covers it, because one
+    // out-and-back down an avenue encloses the strip between its two passes.
+    // Filling here would have bought nothing and charged a full paged read of
+    // tile_visits before every upload. The fill lives at render on the
+    // history map, which is the only surface that applies no enclosure at
+    // all. Re-run `npm run measure-holes` before reviving this.
+    const claim = await claimTiles(data.id, cells, region, run.enclosedCells ?? []);
     return {
       ok: true,
       runId: data.id,

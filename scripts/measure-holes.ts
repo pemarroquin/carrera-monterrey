@@ -14,6 +14,14 @@
 // everywhere else (see gap-policy.ts's bridge caps). So the cap matters, and
 // guessing it is exactly what this script exists to avoid.
 //
+// It also answered a SECOND question, which is why it reports both tables:
+// whether territory has the same holes. It does not. Measured 2026-09-09,
+// the heaviest runner had 38 holes across 919 visited cells and ZERO across
+// 1 057 owned ones — per-run enclosure already covers them, because one
+// out-and-back down an avenue encloses the strip between its two passes.
+// That is what scoped the fill to the history map's render and kept it out
+// of the claim path. Check this again before widening it.
+//
 // Read-only. Anon key and the read-all policies, same posture as
 // verify-claims.ts and audit-territories.mjs — it cannot modify anything.
 //
