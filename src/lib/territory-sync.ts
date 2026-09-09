@@ -370,6 +370,18 @@ export async function uploadRun(run: RunUpload): Promise<SyncOutcome> {
     const cells = pathToTiles(run.points).cells;
     // Enclosure comes in already computed and already zone-filtered — see
     // RunUpload.enclosedCells for why it cannot be derived here.
+    //
+    // Sampling holes are NOT filled here, and that was measured rather than
+    // assumed. A first pass added them at claim time on the theory that the
+    // union of many runs leaves holes no single run enclosed. It does — in
+    // `tile_visits`. It does NOT in territory: measured 2026-09-09, the
+    // heaviest runner had 38 holes across 919 visited cells and ZERO across
+    // 1 057 owned ones. Per-run enclosure already covers it, because one
+    // out-and-back down an avenue encloses the strip between its two passes.
+    // Filling here would have bought nothing and charged a full paged read of
+    // tile_visits before every upload. The fill lives at render on the
+    // history map, which is the only surface that applies no enclosure at
+    // all. Re-run `npm run measure-holes` before reviving this.
     const claim = await claimTiles(data.id, cells, region, run.enclosedCells ?? []);
     return {
       ok: true,
