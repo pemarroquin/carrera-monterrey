@@ -41,13 +41,14 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BoardRow } from '@/components/board-row';
+import { DistrictMap, type DistrictHolding } from '@/components/district-map';
 import { ShareBar, type ShareSegment } from '@/components/share-bar';
 import { Icon } from '@/components/ui/icon';
 import { fenceColorForRun } from '@/constants/map';
 import { BottomTabInset, Colors, Spacing, type ThemeColor } from '@/constants/theme';
 import { onIdentityChanged } from '@/lib/auth-events';
 import { fetchDistrictParkCells, fetchDistrictVisits, type ParkCell } from '@/lib/boards';
-import { districtLabel, districtOf } from '@/lib/district';
+import { districtLabel, districtOf, districtOfCell } from '@/lib/district';
 import { useI18n } from '@/lib/i18n';
 import { districtConquest, type TileOwnerRow } from '@/lib/leaderboard';
 import {
@@ -163,6 +164,25 @@ export default function LeaderboardScreen() {
     return contestedCells(mine, mayors, data.meUserId).length;
   }, [data, mayors, district]);
 
+  // The map's input. Same source as the share bar and the rows — one fetch,
+  // three views of it, so they can never disagree about who holds what.
+  const holdings = useMemo<DistrictHolding[]>(() => {
+    if (!data?.tiles || district === null) return [];
+    const byOwner = new Map<string, string[]>();
+    for (const tile of data.tiles) {
+      if (districtOfCell(tile.h3) !== district) continue;
+      const cells = byOwner.get(tile.ownerId);
+      if (cells) cells.push(tile.h3);
+      else byOwner.set(tile.ownerId, [tile.h3]);
+    }
+    return [...byOwner.entries()].map(([userId, cells]) => ({
+      userId,
+      cells,
+      color: tintFor(userId),
+      isMe: userId === data.meUserId,
+    }));
+  }, [data, district]);
+
   const shareSegments = useMemo<ShareSegment[]>(() => {
     if (!conquest || !conquest.hasDenominator) return [];
     return conquest.entries.map((entry) => ({
@@ -252,6 +272,16 @@ export default function LeaderboardScreen() {
             )}
           </View>
         </Animated.View>
+
+        {/* WHERE the ground is. Keyed on the district so a new arena
+            remounts with a new camera frame rather than animating there —
+            see the map's own mount-effect comment. Hidden when nobody holds
+            anything: an empty frame is not a picture of a contest. */}
+        {holdings.length > 0 && (
+          <Animated.View entering={FadeInDown.duration(340).delay(40)}>
+            <DistrictMap key={district} district={district} holdings={holdings} />
+          </Animated.View>
+        )}
 
         {/* WHO HOLDS THIS PLACE, as one bar. Only where there is a real
             denominator — a bar of nothing is not a picture of anything. */}
