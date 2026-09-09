@@ -107,6 +107,11 @@ export default function LocationSettingsScreen() {
   const [zone, setZone] = useState<PrivacyZone | null>(() => getHomeZone());
   const [zoneBusy, setZoneBusy] = useState(false);
   const [zoneError, setZoneError] = useState(false);
+  // Removing the zone is one tap away from uploading the exact start and end
+  // of every future session, so it asks first — the same two-step the run
+  // delete uses (myraces.tsx's DetailCard), not a modal. SETTING it stays
+  // frictionless: only the destructive direction is guarded.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   const setZoneHere = useCallback(async () => {
     setZoneBusy(true);
@@ -140,6 +145,7 @@ export default function LocationSettingsScreen() {
     clearHomeZone();
     setZone(getHomeZone());
     setZoneError(false);
+    setConfirmingRemove(false);
   }, []);
 
   return (
@@ -159,13 +165,37 @@ export default function LocationSettingsScreen() {
               ? t('settings.zoneOnHint', { m: zone.radiusM })
               : t('settings.zoneOffHint')}
         </Hint>
-        <RowAction onPress={zone ? clearZone : setZoneHere} busy={zoneBusy} c={c}>
-          {zoneBusy
-            ? t('settings.zoneSetting')
-            : zone
-              ? t('settings.zoneRemove')
-              : t('settings.zoneSetHere')}
-        </RowAction>
+        {confirmingRemove && zone ? (
+          <View style={styles.confirm}>
+            <Text style={[settingsStyles.hint, { color: c.textSecondary }]}>
+              {t('settings.zoneRemoveConfirmBody')}
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable
+                onPress={() => setConfirmingRemove(false)}
+                accessibilityRole="button"
+                hitSlop={10}>
+                <Text style={[styles.action, { color: c.textSecondary }]}>{t('common.cancel')}</Text>
+              </Pressable>
+              <Pressable onPress={clearZone} accessibilityRole="button" hitSlop={10}>
+                <Text style={[styles.action, { color: c.accent }]}>
+                  {t('settings.zoneRemoveConfirmAction')}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <RowAction
+            onPress={zone ? () => setConfirmingRemove(true) : setZoneHere}
+            busy={zoneBusy}
+            c={c}>
+            {zoneBusy
+              ? t('settings.zoneSetting')
+              : zone
+                ? t('settings.zoneRemove')
+                : t('settings.zoneSetHere')}
+          </RowAction>
+        )}
       </View>
 
       <View style={settingsStyles.block}>
@@ -284,6 +314,8 @@ function RowAction({
 const STATUS_ON = '#2FBF71';
 
 const styles = StyleSheet.create({
+  confirm: { gap: Spacing.two },
+  confirmActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.four },
   statusWrap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusValue: { fontSize: 15, fontWeight: '600' },
