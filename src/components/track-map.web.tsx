@@ -264,6 +264,21 @@ export function TrackMap({
   const mapRef = useRef<MapboxMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const readyRef = useRef(false);
+  // The same fact as readyRef, as STATE — because a ref cannot wake an
+  // effect. Every effect below bails until the map has loaded, and most
+  // re-run on their own data (points, here, tiles) a fix or two later. Two
+  // do NOT: the animation-arming and gesture-listener effects depend only on
+  // `active`, which changes once at session start and not again. If the map
+  // was still loading at that moment they bailed and never ran for the whole
+  // session — no gradient flow, no conquered shimmer, and no drag/zoom
+  // listeners at all, so the browse hold and auto-return simply did not
+  // exist. Reachable on any cold start: mapbox-gl is a 1.8 MB dynamic
+  // import plus a style fetch, and a runner can press Start inside that.
+  //
+  // Every readiness-gated effect now lists `mapReady`, so "the map finished
+  // loading" is an event they can all react to rather than a value they
+  // happened to read too early.
+  const [mapReady, setMapReady] = useState(false);
   const flownRef = useRef(false);
   // The "feels alive even standing still" animation timer — a JS interval,
   // not a requestAnimationFrame loop (see the pulse-dot comment below for
@@ -624,6 +639,10 @@ export function TrackMap({
         });
         markerRef.current = new mapboxgl.Marker({ element: el });
         readyRef.current = true;
+        // Ref first, then state: the ref is what the imperative call sites
+        // read (the marker's dblclick, applyCameraForMode's callers), and it
+        // must be true before any effect this wakes can run.
+        setMapReady(true);
       });
     })();
 
@@ -695,7 +714,7 @@ export function TrackMap({
         map.setPaintProperty(ENCLOSED_SRC, 'fill-color', ROUTE_GRADIENT_COLORS[0]);
       }
     };
-  }, [active]);
+  }, [active, mapReady]);
 
   // Resets the camera mode to 'follow' at the start of every session — the
   // mode is session-scoped, not a persisted user setting. Gated to fire only
@@ -716,7 +735,7 @@ export function TrackMap({
     // index.tsx's checkpoint-load effect.
     const id = setTimeout(() => setCameraMode('follow'), 0);
     return () => clearTimeout(id);
-  }, [active]);
+  }, [active, mapReady]);
 
   // Auto-return after AUTO_RETURN_IDLE_MS of no further interaction — gated
   // on `active` the same way as the animation timers above: this exists to
@@ -785,7 +804,7 @@ export function TrackMap({
         autoReturnTimerRef.current = null;
       }
     };
-  }, [active, applyCameraForMode]);
+  }, [active, applyCameraForMode, mapReady]);
 
   // Marker placement is deliberately gated on a REAL fix. Showing the pin at
   // the region fallback is what made it look like the location was wrong —
@@ -807,7 +826,7 @@ export function TrackMap({
       return;
     }
     marker.setLngLat([head.lng, head.lat]).addTo(map);
-  }, [points, here]);
+  }, [points, here, mapReady]);
 
   // Idle: keep the camera over the runner as they move, so the map isn't
   // still framing wherever they were when the tab opened. Skipped during a
@@ -816,7 +835,7 @@ export function TrackMap({
     const map = mapRef.current;
     if (!map || !readyRef.current || active || !here) return;
     map.easeTo({ center: [here.lng, here.lat], duration: 600 });
-  }, [here, active]);
+  }, [here, active, mapReady]);
 
   // Fly in when a session starts: tilt into 3D and close on the runner. Runs
   // once per session (flownRef), so a later GPS fix doesn't re-trigger it.
@@ -849,7 +868,7 @@ export function TrackMap({
       duration: SESSION_FLY_MS,
       essential: true,
     });
-  }, [active, points, here]);
+  }, [active, points, here, mapReady]);
 
   // Per-run fence colour. The wall and tile layers are created once at mount
   // (before any session exists) with the default FENCE_WALL_COLOR, so the
@@ -865,7 +884,7 @@ export function TrackMap({
     if (!map || !readyRef.current) return;
     map.setPaintProperty(WALL_SRC, 'fill-extrusion-color', fenceColor);
     map.setPaintProperty(TILES_SRC, 'fill-color', fenceColor);
-  }, [fenceColor, active]);
+  }, [fenceColor, active, mapReady]);
 
   // Tile Coverage brief §6 step 4 — deliberately its OWN effect, not folded
   // into the points-driven effect below that owns ROUTE_SRC/the camera.
@@ -902,7 +921,7 @@ export function TrackMap({
     (map.getSource(WALL_SRC) as GeoJSONSource | undefined)?.setData(
       tileFeatureCollection([...tiles, ...enclosedTiles]),
     );
-  }, [tiles, enclosedTiles]);
+  }, [tiles, enclosedTiles, mapReady]);
 
   // Feed coordinates in. setData on an existing source is the cheap path —
   // no layer or style churn, so the line simply extends.
